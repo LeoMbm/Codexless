@@ -13,6 +13,7 @@ const multiProjectDoc = await readFile(path.join(root, "docs", "multi-project-ru
 const workspaceTools = await readFile(path.join(root, "src", "workspace-tools.mjs"), "utf8");
 const scopedRuntime = await readFile(path.join(root, "src", "connection-scoped-runtime.mjs"), "utf8");
 const runtimeLifecycle = await readFile(path.join(root, "src", "runtime-project-lifecycle.mjs"), "utf8");
+const projectToolScopeGuard = await readFile(path.join(root, "src", "project-tool-scope-guard.mjs"), "utf8");
 const publicServerFactory = await readFile(path.join(root, "src", "public-server-factory.mjs"), "utf8");
 const rescueTools = await readFile(path.join(root, "src", "rescue-tools.mjs"), "utf8");
 const controlPlane = await readFile(path.join(root, "bin", "rootbound.mjs"), "utf8");
@@ -36,6 +37,7 @@ for (const relative of [
   "src/connection-project-access.mjs",
   "src/runtime-project-lifecycle.mjs",
   "src/connection-scoped-runtime.mjs",
+  "src/project-tool-scope-guard.mjs",
   "docs/multi-project-runtime.md",
   "test/project-scope-v5.mjs",
   "test/connection-project-access-v5.mjs",
@@ -82,6 +84,15 @@ assert.match(doctor, /PUBLIC_SURFACE_VERSION.*contract is internally consistent/
 assert.doesNotMatch(doctor, /PUBLIC_SURFACE_VERSION\s*===\s*["']rootbound-public-preview-v\d+["']/);
 assert.doesNotMatch(doctor, /V5 surface contract/);
 
+assert.match(projectToolScopeGuard, /codex\.command_exec/);
+assert.match(projectToolScopeGuard, /codex\.git_status/);
+assert.match(projectToolScopeGuard, /codex\.precise_edit/);
+assert.match(projectToolScopeGuard, /authorityExecutor\.resolveAuthority\(\{ cwd: null, access: "readOnly"/);
+assert.match(publicServerFactory, /createProjectScopeGuardedServer/);
+assert.match(publicServerFactory, /guardProjectToolScope\("codex\.command_exec"/);
+assert.match(publicServerFactory, /registerCommandTools\(projectScopeGuardedServer/);
+assert.match(publicServerFactory, /registerConstructionTools\(projectScopeGuardedServer/);
+assert.match(publicServerFactory, /registerRepoTools\(projectScopeGuardedServer/);
 assert.match(publicServerFactory, /codex\.workspace_list first/);
 assert.match(publicServerFactory, /Never treat the runtime anchor/);
 assert.match(publicServerFactory, /PROJECT_SCOPE_REQUIRED/);

@@ -4,6 +4,7 @@ import { registerBrowserReaderTools } from "./browser-reader-tools.mjs";
 import { registerCommandTools } from "./command-tools.mjs";
 import { registerConstructionTools } from "./construction-tools.mjs";
 import { registerPublicContextTools } from "./public-context-tools.mjs";
+import { createProjectScopeGuardedServer, createProjectToolScopeGuard } from "./project-tool-scope-guard.mjs";
 import { registerRepoTools } from "./repo-tools.mjs";
 import { registerRescueTools } from "./rescue-tools.mjs";
 import { summarizeRedactedArgv } from "./secret-boundaries.mjs";
@@ -50,6 +51,8 @@ export function createPublicServerFactory({ executor, authorityExecutor, publicC
       { name: "rootbound", title: "Rootbound Local", version: PUBLIC_SERVER_VERSION, description: "ChatGPT-only local coding bridge built on verified model-free Codex App Server primitives." },
       { instructions: "Rootbound Local is a ChatGPT-only, model-free coding surface. ChatGPT itself must reason, plan, inspect, edit, run tests, interpret failures, and decide next steps. This server exposes no Codex model, model catalog, agent delegation, Task Card, or turn/start tool. Rootbound may expose multiple local project workspaces through one runtime. When the intended project is not already explicit from a cwd, bindingRef, rescueRef, or prior workspace result, call codex.workspace_list first and choose only from the returned connection-scoped workspaces. Open the intended project with codex.workspace_open and silently propagate its canonical cwd/project scope on subsequent project operations. Never treat the runtime anchor, most recently used project, or a display name as implicit authority; if Rootbound reports PROJECT_SCOPE_REQUIRED, resolve the intended workspace rather than retrying unscoped. When the user says continue, resume, pick up where Codex stopped, or mentions Codex quota/interruption, call codex.continuity_resume first; do not ask for a thread id unless Rootbound reports genuine ambiguity. continuity_resume may reattach an existing durable rescue from another ChatGPT conversation or consume a pre-armed quota rescue candidate after revalidating the current worktree. Keep the rescueRef returned by continuity_resume in tool state and silently pass it to supported project tools and continuity_handoff/rollback/search whenever present. Never ask the user to copy a rescueRef or bindingRef. A local stdio MCP connection may additionally provide implicit rescue scoping; remote HTTP does not assume that a transport session equals one ChatGPT conversation. Use codex.continuity_handoff to return verified work plus a hashed Rootbound continuity manifest to the original Codex thread, codex.continuity_rollback for guarded rescue-only rollback, codex.continuity_search for cold-memory lookup, and codex.quota_status for advisory quota state. Prefer repo_search/read_many/git_status/git_diff for inspection, apply_patch or precise_edit for edits, command_exec for short buffered tests/builds, and command_start plus command_poll for long-running work. Never attempt to launch Codex CLI through command tools; nested Codex launches are refused. No public tool starts a Codex model turn." }
     );
+    const guardProjectToolScope = createProjectToolScopeGuard({ authorityExecutor });
+    const projectScopeGuardedServer = createProjectScopeGuardedServer(server, { guardProjectToolScope });
 
     server.registerTool(
       "codex.command_exec",
@@ -70,6 +73,7 @@ export function createPublicServerFactory({ executor, authorityExecutor, publicC
         }
         inFlight += 1;
         try {
+          await guardProjectToolScope("codex.command_exec", { cwd, bindingRef, rescueRef });
           const resolved = rescueManager.resolveBinding({ sessionKey: getSessionKey(ctx), cwd, explicitBindingRef: bindingRef, rescueRef });
           const effectiveBindingRef = resolved.bindingRef;
           if (resolved.rescue && access === "inherit") await rescueManager.assertNoDrift(resolved.rescue);
@@ -96,12 +100,12 @@ export function createPublicServerFactory({ executor, authorityExecutor, publicC
     );
 
     registerWorkspaceTools(server, { store: stateStore, authorityExecutor, publicContext });
-    registerCommandTools(server, { commandManager, continuityState, rescueManager, getSessionKey });
+    registerCommandTools(projectScopeGuardedServer, { commandManager, continuityState, rescueManager, getSessionKey });
     registerPublicContextTools(server, publicContext);
     registerThreadHistoryTools(server, { context: publicContext, authorityExecutor, continuityState, stateStore });
     registerRescueTools(server, { context: publicContext, authorityExecutor, continuityState, stateStore, rescueManager, rescueAutopilot, getSessionKey });
-    registerConstructionTools(server, { authorityExecutor, continuityState, stateStore, rescueManager, getSessionKey });
-    registerRepoTools(server, { authorityExecutor, continuityState, rescueManager, getSessionKey });
+    registerConstructionTools(projectScopeGuardedServer, { authorityExecutor, continuityState, stateStore, rescueManager, getSessionKey });
+    registerRepoTools(projectScopeGuardedServer, { authorityExecutor, continuityState, rescueManager, getSessionKey });
     registerBrowserReaderTools(server, browserReader);
     return server;
   };
