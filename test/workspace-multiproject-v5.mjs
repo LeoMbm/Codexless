@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { projectRefForRoot } from "../src/project-registry.mjs";
 import { createRuntimeProjectAccessProvider, listWorkspaces, openWorkspace } from "../src/workspace-tools.mjs";
 
 const temp = await mkdtemp(path.join(os.tmpdir(), "rootbound-workspace-multi-"));
@@ -11,8 +12,8 @@ await mkdir(aRoot);
 await mkdir(bRoot);
 const aCanonical = await realpath(aRoot);
 const bCanonical = await realpath(bRoot);
-const a = { projectRef: "project_aaaaaaaaaaaaaaaaaaaa", root: aCanonical, gitRoot: aCanonical, name: "same", trusted: true };
-const b = { projectRef: "project_bbbbbbbbbbbbbbbbbbbb", root: bCanonical, gitRoot: bCanonical, name: "same", trusted: true };
+const a = { projectRef: projectRefForRoot(aCanonical), root: aCanonical, gitRoot: aCanonical, name: "same", trusted: true };
+const b = { projectRef: projectRefForRoot(bCanonical), root: bCanonical, gitRoot: bCanonical, name: "same", trusted: true };
 const rows = new Map([[a.projectRef, a], [b.projectRef, b]]);
 const byRoot = new Map([[aCanonical, a], [bCanonical, b]]);
 const events = [];
