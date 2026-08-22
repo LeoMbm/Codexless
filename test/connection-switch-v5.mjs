@@ -4,10 +4,13 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { grantConnectionProjectAccess } from "../src/connection-project-access.mjs";
 import { addConnection, getActiveConnection, loadConnectionRegistry } from "../src/connection-registry.mjs";
 import { resolveConnectionPaths } from "../src/connection-paths.mjs";
+import { registerProject } from "../src/project-registry.mjs";
 import { runtimeStatus, stopRuntime } from "../src/runtime-state.mjs";
 import { resolveRootboundPaths } from "../src/state-paths.mjs";
+import { openStateStore } from "../src/state-store.mjs";
 import { saveTunnelConfig } from "../src/tunnel-config.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -46,9 +49,21 @@ await configure(a.connection, "ready");
 await configure(b.connection, "ready");
 await configure(c.connection, "fail");
 
+const store = await openStateStore({ paths });
+let project;
+try {
+  project = await registerProject(store, root, { trusted: true });
+} finally { store.close(); }
+for (const { connection } of [a, b, c]) {
+  await grantConnectionProjectAccess({
+    paths: resolveConnectionPaths({ paths, connection }),
+    projectRef: project.projectRef,
+  });
+}
+
 const initial = spawn(process.execPath, [path.join(repoRoot, "scripts", "supervisor.mjs")], {
   cwd: repoRoot,
-  env: { ...process.env, ROOTBOUND_HOME: home, ROOTBOUND_PROJECT_REF: "project_test", ROOTBOUND_PROJECT_ROOT: root, ROOTBOUND_CONNECTION_ID: a.connection.id, ROOTBOUND_TUNNEL_RESTART_LIMIT: "0" },
+  env: { ...process.env, ROOTBOUND_HOME: home, ROOTBOUND_PROJECT_REF: project.projectRef, ROOTBOUND_PROJECT_ROOT: project.root, ROOTBOUND_CONNECTION_ID: a.connection.id, ROOTBOUND_TUNNEL_RESTART_LIMIT: "0" },
   detached: true,
   stdio: "ignore",
   windowsHide: true,
