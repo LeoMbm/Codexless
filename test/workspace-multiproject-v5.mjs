@@ -15,11 +15,13 @@ const a = { projectRef: "project_aaaaaaaaaaaaaaaaaaaa", root: aCanonical, gitRoo
 const b = { projectRef: "project_bbbbbbbbbbbbbbbbbbbb", root: bCanonical, gitRoot: bCanonical, name: "same", trusted: true };
 const rows = new Map([[a.projectRef, a], [b.projectRef, b]]);
 const byRoot = new Map([[aCanonical, a], [bCanonical, b]]);
+const events = [];
 const store = {
   listProjects() { return [...rows.values()]; },
   getProject(projectRef) { return rows.get(projectRef) ?? null; },
   getProjectByRoot(root) { return byRoot.get(path.resolve(root)) ?? null; },
   upsertProject(project) { rows.set(project.projectRef, project); byRoot.set(path.resolve(project.root), project); return project; },
+  recordEvent(event) { events.push(event); return event; },
 };
 const accessBoth = async () => ({ enforced: true, connectionId: "connection_test", projectRefs: [a.projectRef, b.projectRef] });
 const listed = await listWorkspaces({ store, projectAccessProvider: accessBoth });
@@ -49,6 +51,9 @@ const opened = await openWorkspace({
 assert.equal(opened.status, "ready");
 assert.equal(opened.project.projectRef, b.projectRef);
 assert.equal(authorityCwd, bCanonical);
+assert.equal(events.length, 1);
+assert.equal(events[0].projectRef, b.projectRef);
+assert.equal(events[0].kind, "project.connected");
 
 const onlyA = async () => ({ enforced: true, connectionId: "connection_test", projectRefs: [a.projectRef] });
 await assert.rejects(
