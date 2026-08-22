@@ -1,14 +1,17 @@
 import process from "node:process";
 import { ACCEPTED_CODEX_VERSIONS, CodexAuthorityExecutor } from "../src/codex-authority-executor.mjs";
 import { resolveCodexExecutable } from "../src/codex-bin.mjs";
+import { createConnectionScopedAuthorityExecutor } from "../src/connection-scoped-runtime.mjs";
 import { readJsonFile } from "../src/json-file.mjs";
 import { withRootboundPermissionOverrides } from "../src/rootbound-permission-profile.mjs";
 import { resolveRootboundPaths } from "../src/state-paths.mjs";
 import { openStateStore } from "../src/state-store.mjs";
+import { createRuntimeProjectAccessProvider } from "../src/workspace-tools.mjs";
 
 const commandId = process.env.ROOTBOUND_COMMAND_ID;
 if (!commandId) throw new Error("ROOTBOUND_COMMAND_ID is required");
-const store = await openStateStore({ paths: resolveRootboundPaths() });
+const paths = resolveRootboundPaths();
+const store = await openStateStore({ paths });
 const command = store.getCommand(commandId);
 if (!command) { store.close(); throw new Error(`Unknown Rootbound command: ${commandId}`); }
 let terminal = false;
@@ -36,7 +39,7 @@ try {
     ? (await readJsonFile(configOverridesFile, "ROOTBOUND_CONFIG_OVERRIDES_FILE"))?.overrides
     : [];
   const configOverrides = withRootboundPermissionOverrides(configuredOverrides, { profileOverride });
-  const executor = new CodexAuthorityExecutor({
+  const baseExecutor = new CodexAuthorityExecutor({
     codexBin: resolution.path,
     defaultCwd: command.cwd,
     profileOverride,
@@ -46,7 +49,10 @@ try {
     outputBytesCap: 1_048_576,
     acceptedCodexVersions: ACCEPTED_CODEX_VERSIONS,
   });
-  await executor.validate();
+  await baseExecutor.validate();
+  const projectAccessProvider = createRuntimeProjectAccessProvider({ store, env: process.env, paths });
+  const executor = createConnectionScopedAuthorityExecutor({ base: baseExecutor, store, projectAccessProvider });
+  await executor.resolveAuthority({ cwd: command.cwd, access: command.access, timeoutMs: Math.min(command.timeoutMs, 15_000) });
   store.updateCommand(commandId, { status: "running", workerPid: process.pid, updatedAt: Date.now() });
   store.recordEvent({ projectRef: command.projectRef, bindingRef: command.bindingRef, kind: "command.running", payload: { commandId, mode: "buffered" }, createdAt: Date.now() });
   const result = await executor.exec({ command: command.argv, cwd: command.cwd, access: command.access, timeoutMs: command.timeoutMs });

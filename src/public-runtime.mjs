@@ -4,6 +4,7 @@ import { CodexBrowserReaderExecutor } from "./browser-reader-executor.mjs";
 import { resolveCodexExecutable } from "./codex-bin.mjs";
 import { resolveCompatibleCodexRuntime } from "./codex-compatibility.mjs";
 import { createCommandManager } from "./command-manager.mjs";
+import { createConnectionScopedAuthorityExecutor, createConnectionScopedBrowserReader, createConnectionScopedPublicContext } from "./connection-scoped-runtime.mjs";
 import { createDurableRescueManager } from "./durable-rescue.mjs";
 import { readJsonFile } from "./json-file.mjs";
 import { createPersistentContinuityState } from "./persistent-continuity-state.mjs";
@@ -15,6 +16,7 @@ import { withRootboundPermissionOverrides } from "./rootbound-permission-profile
 import { resolveRootboundPaths } from "./state-paths.mjs";
 import { openStateStore } from "./state-store.mjs";
 import { PUBLIC_SERVER_VERSION, PUBLIC_SURFACE_VERSION, PUBLIC_TOOL_NAMES } from "./surface-contracts.mjs";
+import { createRuntimeProjectAccessProvider } from "./workspace-tools.mjs";
 
 function envString(env, name, fallback = null) {
   const value = env?.[name];
@@ -106,29 +108,34 @@ export async function createPublicRuntime({ env = process.env } = {}) {
   try {
     publicContext = new CodexPublicContextExecutor({ codexBin, defaultCwd, configOverrides });
     await publicContext.start();
-    stateStore = await openStateStore({ paths: resolveRootboundPaths({ env }) });
+    const rootboundPaths = resolveRootboundPaths({ env });
+    stateStore = await openStateStore({ paths: rootboundPaths });
+    const projectAccessProvider = createRuntimeProjectAccessProvider({ store: stateStore, env, paths: rootboundPaths });
+    const scopedAuthorityExecutor = createConnectionScopedAuthorityExecutor({ base: authorityExecutor, store: stateStore, projectAccessProvider });
+    const scopedPublicContext = createConnectionScopedPublicContext({ base: publicContext, store: stateStore, projectAccessProvider });
 
     const continuityState = createPersistentContinuityState({ store: stateStore });
-    const baseRescueManager = createRescueSessionManager({ store: stateStore, authorityExecutor, continuityState });
+    const baseRescueManager = createRescueSessionManager({ store: stateStore, authorityExecutor: scopedAuthorityExecutor, continuityState });
     const rescueManager = createDurableRescueManager({ base: baseRescueManager, store: stateStore });
     commandManager = createCommandManager({
       store: stateStore,
       continuityState,
       rescueManager,
-      authorityExecutor,
+      authorityExecutor: scopedAuthorityExecutor,
       codexBin,
       configOverrides,
       packageRoot: path.resolve(import.meta.dirname, ".."),
       env,
     });
-    const browserReader = new CodexBrowserReaderExecutor({ context: publicContext, defaultCwd });
+    const baseBrowserReader = new CodexBrowserReaderExecutor({ context: scopedPublicContext, defaultCwd });
+    const browserReader = createConnectionScopedBrowserReader({ base: baseBrowserReader, store: stateStore, projectAccessProvider });
 
     if (rescueAutopilotEnabled) {
       rescueAutopilot = createRescueAutopilot({
-        publicContext,
+        publicContext: scopedPublicContext,
         store: stateStore,
         rescueManager,
-        authorityExecutor,
+        authorityExecutor: scopedAuthorityExecutor,
         defaultCwd,
         thresholdPercent: rescueAutopilotThreshold,
         intervalMs: rescueAutopilotIntervalMs,
@@ -137,9 +144,9 @@ export async function createPublicRuntime({ env = process.env } = {}) {
     }
 
     const createServer = createPublicServerFactory({
-      executor: authorityExecutor,
-      authorityExecutor,
-      publicContext,
+      executor: scopedAuthorityExecutor,
+      authorityExecutor: scopedAuthorityExecutor,
+      publicContext: scopedPublicContext,
       browserReader,
       continuityState,
       rescueManager,

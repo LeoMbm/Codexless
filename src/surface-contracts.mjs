@@ -1,5 +1,5 @@
-export const PUBLIC_SERVER_VERSION = "0.1.0-preview.9";
-export const PUBLIC_SURFACE_VERSION = "rootbound-public-preview-v5";
+export const PUBLIC_SERVER_VERSION = "0.1.0-preview.10";
+export const PUBLIC_SURFACE_VERSION = "rootbound-public-preview-v6";
 
 export const PUBLIC_TOOL_NAMES = Object.freeze([
   "codex.command_exec",
@@ -7,6 +7,7 @@ export const PUBLIC_TOOL_NAMES = Object.freeze([
   "codex.command_poll",
   "codex.command_write",
   "codex.command_terminate",
+  "codex.workspace_list",
   "codex.workspace_open",
   "codex.project_context",
   "codex.skill_list",

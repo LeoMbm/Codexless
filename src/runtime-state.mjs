@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
 import { open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export async function readRuntimeState(paths) {
   try {
@@ -33,24 +37,79 @@ export async function runtimeStatus(paths) {
   return { status: running ? "running" : "stale", running, stale: !running, state };
 }
 
-export async function stopRuntime(paths, { force = false } = {}) {
+export async function stopRuntime(paths, { force = false, platform = process.platform } = {}) {
   const current = await runtimeStatus(paths);
   if (!current.state) return { status: "stopped", stopped: false, reason: "not_running" };
-  if (!current.running) {
+
+  const supervisorPid = runtimeSupervisorPid(current.state);
+  const tunnelPid = runtimeTunnelPid(current.state);
+  const supervisorAlive = isProcessAlive(supervisorPid);
+  const tunnelAlive = isProcessAlive(tunnelPid);
+  if (!supervisorAlive && !tunnelAlive) {
     await clearRuntimeState(paths);
-    return { status: "stopped", stopped: false, reason: "stale_state_cleared", previousPid: current.state.pid ?? null };
+    return { status: "stopped", stopped: false, reason: "stale_state_cleared", previousPid: supervisorPid ?? null, previousTunnelPid: tunnelPid ?? null };
   }
+
   const signal = force ? "SIGKILL" : "SIGTERM";
-  process.kill(current.state.pid, signal);
+  await signalRuntimeTree({ supervisorPid, tunnelPid, force, platform });
   const deadline = Date.now() + (force ? 1500 : 5000);
   while (Date.now() < deadline) {
-    if (!isProcessAlive(current.state.pid)) {
+    if (!isProcessAlive(supervisorPid) && !isProcessAlive(tunnelPid)) {
       await clearRuntimeState(paths);
-      return { status: "stopped", stopped: true, signal, previousPid: current.state.pid };
+      return { status: "stopped", stopped: true, signal, previousPid: supervisorPid ?? null, previousTunnelPid: tunnelPid ?? null };
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return { status: "stopping", stopped: false, signal, pid: current.state.pid };
+  return {
+    status: "stopping",
+    stopped: false,
+    signal,
+    pid: supervisorPid ?? null,
+    tunnelPid: tunnelPid ?? null,
+    supervisorAlive: isProcessAlive(supervisorPid),
+    tunnelAlive: isProcessAlive(tunnelPid),
+  };
+}
+
+async function signalRuntimeTree({ supervisorPid, tunnelPid, force, platform }) {
+  if (platform === "win32") {
+    const rootPid = isProcessAlive(supervisorPid) ? supervisorPid : tunnelPid;
+    if (!Number.isInteger(rootPid) || rootPid <= 0) return;
+    try {
+      await execFileAsync("taskkill", ["/PID", String(rootPid), "/T", ...(force ? ["/F"] : [])], { windowsHide: true, timeout: 5000, maxBuffer: 512 * 1024 });
+      return;
+    } catch (error) {
+      if (!isProcessAlive(supervisorPid) && !isProcessAlive(tunnelPid)) return;
+      throw error;
+    }
+  }
+
+  const signal = force ? "SIGKILL" : "SIGTERM";
+  for (const groupId of [supervisorPid, tunnelPid]) {
+    if (!Number.isInteger(groupId) || groupId <= 0) continue;
+    try {
+      process.kill(-groupId, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+  }
+
+  for (const pid of [tunnelPid, supervisorPid]) {
+    if (!isProcessAlive(pid)) continue;
+    try { process.kill(pid, signal); }
+    catch (error) { if (error?.code !== "ESRCH") throw error; }
+  }
+}
+
+function runtimeSupervisorPid(state) {
+  const value = state?.supervisorPid ?? state?.pid;
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function runtimeTunnelPid(state) {
+  const value = state?.tunnelPid;
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 export async function tailLog(logPath, { maxBytes = 64 * 1024 } = {}) {

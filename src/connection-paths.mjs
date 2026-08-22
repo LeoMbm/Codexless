@@ -11,6 +11,8 @@ export function resolveConnectionPaths({ paths, connection } = {}) {
       tunnelManagedProfilePath: paths.tunnelManagedProfilePath,
       tunnelSecretPath: paths.tunnelSecretPath,
       tunnelHealthUrlPath: paths.tunnelHealthUrlPath,
+      projectAccessPath: path.join(paths.stateDir, `connection-projects-${connection.id}.json`),
+      projectAccessLockPath: path.join(paths.stateDir, `connection-projects-${connection.id}.lock`),
     });
   }
   if (connection.storageKind !== "scoped-v1") throw new Error(`Unsupported connection storage kind: ${connection.storageKind}`);
@@ -23,5 +25,7 @@ export function resolveConnectionPaths({ paths, connection } = {}) {
     tunnelManagedProfilePath: path.join(connectionDir, "tunnel-client.yaml"),
     tunnelSecretPath: path.join(connectionDir, "tunnel-runtime.key"),
     tunnelHealthUrlPath: path.join(paths.runtimeDir, `tunnel-health-${connection.id}.url`),
+    projectAccessPath: path.join(connectionDir, "projects.json"),
+    projectAccessLockPath: path.join(connectionDir, "projects.lock"),
   });
 }

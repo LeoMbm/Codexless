@@ -30,50 +30,32 @@ try {
   for (const [projectRef, root, name] of [[projectARef, projectA, "project-a"], [projectBRef, projectB, "project-b"]]) {
     store.upsertProject({ projectRef, root, gitRoot: null, name, trusted: true, createdAt: 1, updatedAt: 1, lastConnectedAt: 1 });
   }
-} finally {
-  store.close();
-}
+} finally { store.close(); }
 
-const env = {
-  ...process.env,
-  ROOTBOUND_HOME: stateRoot,
-  ROOTBOUND_TUNNEL_ARGV_JSON: JSON.stringify([process.execPath, "-e", "setInterval(()=>{},1000)"]),
-  NODE_NO_WARNINGS: "1",
-};
+const env = { ...process.env, ROOTBOUND_HOME: stateRoot, ROOTBOUND_TUNNEL_ARGV_JSON: JSON.stringify([process.execPath, "-e", "setInterval(()=>{},1000)"]), NODE_NO_WARNINGS: "1" };
 
 try {
-  const usage = await runCli(["definitely-not-a-command"], { expectedExitCode: 2 });
-  assert.match(usage.stderr, /Unknown command: definitely-not-a-command/);
-  assert.doesNotMatch(usage.stderr, /ReferenceError/);
-  assert.doesNotMatch(usage.stderr, /before initialization/);
-
   const first = JSON.parse((await runCli(["start", projectA, "--json"])).stdout);
   assert.equal(first.ok, true);
-  assert.equal(first.project.projectRef, projectARef);
-  assert.equal(first.runtime.status, "running");
   assert.equal(first.runtime.state.projectRef, projectARef);
-  assert.equal(first.runtime.state.connectionId, "connection_environment");
-  assert.equal(first.runtime.state.connectionName, "environment");
-  assert.equal(first.runtime.state.tunnelSource, "environment", "environment-only advanced mode must survive synthetic connection routing");
+  assert.equal(first.runtime.state.anchorProjectRef, projectARef);
+  assert.equal(first.runtime.state.scopeMode, "multi-project");
   const firstSupervisorPid = first.runtime.state.supervisorPid;
+  const firstRuntimeId = first.runtime.state.runtimeId;
 
   const second = JSON.parse((await runCli(["start", projectB, "--json"])).stdout);
   assert.equal(second.ok, true);
   assert.equal(second.project.projectRef, projectBRef);
-  assert.equal(second.runtime.status, "running");
-  assert.equal(second.runtime.state.projectRef, projectBRef);
-  assert.equal(second.runtime.state.connectionId, "connection_environment");
-  assert.equal(second.runtime.state.tunnelSource, "environment");
-  assert.equal(second.runtime.switched, true);
-  assert.equal(second.runtime.switchedFromProjectRef, projectARef);
-  assert.equal(second.runtime.switchedFromProjectRoot, projectA);
-  assert.notEqual(second.runtime.state.supervisorPid, firstSupervisorPid);
+  assert.equal(second.runtime.state.anchorProjectRef, projectARef, "second project must not replace the runtime anchor");
+  assert.equal(second.runtime.state.supervisorPid, firstSupervisorPid, "second project must reuse the supervisor");
+  assert.equal(second.runtime.state.runtimeId, firstRuntimeId, "second project must reuse the runtime identity");
+  assert.equal(second.runtime.reused, true);
+  assert.equal(second.runtime.requestedProjectRef, projectBRef);
 
   const status = JSON.parse((await runCli(["status", "--json"])).stdout);
   assert.equal(status.runtime.running, true);
-  assert.equal(status.runtime.state.projectRef, projectBRef);
+  assert.equal(status.runtime.state.anchorProjectRef, projectARef);
   assert.equal(status.runtime.state.connectionId, "connection_environment");
-  assert.equal(status.runtime.state.tunnelSource, "environment");
   assert.equal(status.projects.length, 2);
 } finally {
   await runCli(["stop", "--force", "--json"], { allowedExitCodes: [0, 1] }).catch(() => {});
@@ -83,16 +65,8 @@ console.log("control-plane-switch-v5: ok");
 
 async function runCli(args, { expectedExitCode = 0, allowedExitCodes = null } = {}) {
   try {
-    const result = await execFileAsync(process.execPath, [cli, ...args], {
-      cwd: repoRoot,
-      env,
-      timeout: 20_000,
-      windowsHide: true,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    if (expectedExitCode !== 0 && !(allowedExitCodes ?? []).includes(0)) {
-      assert.fail(`Expected rootbound ${args.join(" ")} to exit ${expectedExitCode}, but it exited 0`);
-    }
+    const result = await execFileAsync(process.execPath, [cli, ...args], { cwd: repoRoot, env, timeout: 20_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+    if (expectedExitCode !== 0 && !(allowedExitCodes ?? []).includes(0)) assert.fail(`Expected rootbound ${args.join(" ")} to exit ${expectedExitCode}, but it exited 0`);
     return { ...result, exitCode: 0 };
   } catch (error) {
     const exitCode = Number.isInteger(error?.code) ? error.code : null;

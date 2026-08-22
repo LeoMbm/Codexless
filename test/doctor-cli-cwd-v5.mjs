@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -46,6 +46,6 @@ try {
 }
 
 const observedCwd = await readFile(capture, "utf8");
-assert.equal(path.resolve(observedCwd), path.resolve(project));
+assert.equal(await realpath(observedCwd), await realpath(project));
 
 console.log("doctor-cli-cwd-v5: ok");

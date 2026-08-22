@@ -11,6 +11,13 @@ import { resolveRootboundPaths } from "../src/state-paths.mjs";
 import { runtimeStatus, stopRuntime, tailLog } from "../src/runtime-state.mjs";
 import { resolveTunnelLaunch, tunnelConfigStatus } from "../src/tunnel-config.mjs";
 import {
+  allowedProjectsForCurrentConnection,
+  grantProjectForCurrentConnection,
+  resolveControlPlaneConnection,
+  revokeProjectFromSavedConnections,
+  runtimeMatchesConnection,
+} from "../src/runtime-project-lifecycle.mjs";
+import {
   discoverTunnelCandidates,
   probeTunnelClient,
   rollbackManagedTunnelSetup,
@@ -90,16 +97,18 @@ async function connectCommand(opts) {
   const store = await openStateStore({ paths });
   try {
     const project = await registerProject(store, resolved.root, { trusted: true });
+    const projectAccess = await grantProjectForCurrentConnection({ paths, store, projectRef: project.projectRef, env: process.env });
     const result = {
       ok: true,
       action: "connected",
       project,
+      projectAccess,
       trust: { changed: trust.changed, configPath: trust.configPath, backupPath: trust.backupPath },
       permissionProfile: { id: ROOTBOUND_PERMISSION_PROFILE, changed: !permissionProfileReady, runtimeOnly: true },
       doctor: { status: doctor.value.status, permissionProfile: doctor.value.project.permissionProfile ?? null },
       tunnel,
     };
-    if (!opts.noStart) result.runtime = await startSupervisor(project);
+    if (!opts.noStart) result.runtime = await ensureSharedRuntime(project);
     printResult(result, opts);
   } finally { store.close(); }
 }
@@ -199,76 +208,74 @@ async function resolveRuntimeKey({ interactive, opts }) {
 async function startCommand(opts) {
   const store = await openStateStore({ paths });
   try {
+    const current = await runtimeStatus(paths);
     let project = null;
     if (opts.positionals[0]) {
       const resolved = await resolveProjectRoot(opts.positionals[0]);
       project = store.getProjectByRoot(resolved.root);
+    } else if (current.running && current.state?.projectRef) {
+      project = store.getProject(current.state.projectRef);
     } else {
-      const projects = store.listProjects();
-      if (projects.length === 1) project = projects[0];
-      else if (projects.length > 1) throw new CliUsageError("start requires a project path when multiple projects are registered");
+      const available = await allowedProjectsForCurrentConnection({ paths, store, env: process.env });
+      if (available.projects.length === 1) project = available.projects[0];
+      else if (available.projects.length > 1) throw new CliUsageError("start requires a project path when multiple projects are available on the current connection");
     }
-    if (!project) throw new CliUsageError("No registered project found; run rootbound connect <path> first");
+    if (!project) throw new CliUsageError("No available registered project found; run rootbound connect <path> first");
     if (!project.trusted) throw new Error(`Project is not marked trusted: ${project.root}`);
     if (!await hasRootboundPermissionConsent({ paths })) {
       throw new CliUsageError("Rootbound local Git/network permissions have not been approved for this installation. Run `rootbound connect .` interactively once.");
+    }
+    const available = await allowedProjectsForCurrentConnection({ paths, store, env: process.env });
+    if (available.scoped && !available.projects.some((candidate) => candidate.projectRef === project.projectRef)) {
+      throw new CliUsageError(`Project is not available on the current Rootbound connection: ${project.root}. Run rootbound connect ${JSON.stringify(project.root)} while this connection is active.`);
     }
     try { resolveTunnelLaunch({ packageRoot, projectRoot: project.root, paths }); }
     catch (error) {
       if (error?.code === "TUNNEL_NOT_CONFIGURED") throw new CliUsageError("Tunnel setup is incomplete. Run `rootbound connect .` interactively once to finish the guided setup.");
       throw error;
     }
-    const runtime = await startSupervisor(project);
+    const runtime = await ensureSharedRuntime(project);
     printResult({ ok: true, action: "started", project, runtime }, opts);
   } finally { store.close(); }
 }
 
-async function startSupervisor(project) {
+async function ensureSharedRuntime(project) {
+  const connection = await resolveControlPlaneConnection({ paths, env: process.env });
+  if (!connection.connectionId) {
+    throw controlPlaneError("CONNECTION_NOT_CONFIGURED", "No active Rootbound connection is available. Run `rootbound connect .` first.");
+  }
   const current = await runtimeStatus(paths);
-  if (current.running && current.state?.projectRef === project.projectRef) return current;
-
-  let previousProject = null;
   if (current.running) {
-    previousProject = current.state?.projectRef && current.state?.projectRoot
-      ? { projectRef: current.state.projectRef, root: current.state.projectRoot }
-      : null;
-    await stopRuntimeForSwitch(current.state?.projectRef ?? "unknown");
-  } else if (current.stale) {
-    await stopRuntime(paths);
+    if (!runtimeMatchesConnection(current, connection.connectionId)) {
+      throw controlPlaneError("RUNTIME_CONNECTION_MISMATCH", `Running Rootbound runtime uses ${current.state?.connectionId ?? "an unknown connection"}, while the control plane selected ${connection.connectionId}. Switch connections transactionally or stop Rootbound before retrying.`);
+    }
+    return {
+      ...current,
+      reused: true,
+      requestedProjectRef: project.projectRef,
+      anchorProjectRef: current.state?.anchorProjectRef ?? current.state?.projectRef ?? null,
+      anchorProjectRoot: current.state?.anchorProjectRoot ?? current.state?.projectRoot ?? null,
+    };
   }
-
-  try {
-    const runtime = await launchSupervisor(project);
-    return previousProject
-      ? { ...runtime, switched: true, switchedFromProjectRef: previousProject.projectRef, switchedFromProjectRoot: previousProject.root }
-      : runtime;
-  } catch (error) {
-    if (!previousProject) throw error;
-    let restored = false;
-    try {
-      await launchSupervisor(previousProject);
-      restored = true;
-    } catch {}
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to switch Rootbound runtime from ${previousProject.projectRef} to ${project.projectRef}: ${message}. Previous runtime ${restored ? "was restored" : "could not be restored"}.`);
-  }
+  if (current.stale) await stopRuntime(paths);
+  const started = await launchSupervisor(project, connection.connectionId);
+  return {
+    ...started,
+    reused: false,
+    requestedProjectRef: project.projectRef,
+    anchorProjectRef: started.state?.anchorProjectRef ?? started.state?.projectRef ?? project.projectRef,
+    anchorProjectRoot: started.state?.anchorProjectRoot ?? started.state?.projectRoot ?? project.root,
+  };
 }
 
-async function stopRuntimeForSwitch(projectRef) {
-  let stopped = await stopRuntime(paths);
-  if (stopped.status !== "stopped") stopped = await stopRuntime(paths, { force: true });
-  if (stopped.status !== "stopped") {
-    throw new Error(`Could not stop current Rootbound runtime for ${projectRef}; refusing to start a second project runtime in parallel.`);
-  }
-}
-
-async function launchSupervisor(project) {
+async function launchSupervisor(project, connectionId) {
   const child = spawn(process.execPath, [path.join(packageRoot, "scripts", "supervisor.mjs")], {
     cwd: packageRoot,
     env: {
       ...process.env,
       ROOTBOUND_PROJECT_REF: project.projectRef,
       ROOTBOUND_PROJECT_ROOT: project.root,
+      ROOTBOUND_CONNECTION_ID: connectionId,
       ROOTBOUND_PROFILE: ROOTBOUND_PERMISSION_PROFILE,
     },
     detached: true,
@@ -281,7 +288,8 @@ async function launchSupervisor(project) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const runtime = await runtimeStatus(paths);
-    if (runtime.running && runtime.state?.projectRef === project.projectRef) return runtime;
+    const anchorProjectRef = runtime.state?.anchorProjectRef ?? runtime.state?.projectRef;
+    if (runtime.running && anchorProjectRef === project.projectRef && runtime.state?.connectionId === connectionId) return runtime;
     if (exited) {
       const detail = (await tailLog(paths.logPath, { maxBytes: 8192 })).trim();
       throw new Error(`Rootbound supervisor exited during startup (code=${exited.code} signal=${exited.signal})${detail ? `: ${detail}` : ""}`);
@@ -329,8 +337,9 @@ async function projectCommand(opts) {
     const project = findRegisteredProject(store, target);
     if (!project) throw new CliUsageError(`No registered project matches: ${target}`);
     const runtime = await runtimeStatus(paths);
-    if (runtime.running && runtime.state?.projectRef === project.projectRef) {
-      throw new CliUsageError(`Refusing to remove the active project ${project.projectRef}. Switch Rootbound to another project or run rootbound stop first.`);
+    const anchorProjectRef = runtime.state?.anchorProjectRef ?? runtime.state?.projectRef;
+    if (runtime.running && anchorProjectRef === project.projectRef) {
+      throw new CliUsageError(`Refusing to remove the runtime anchor project ${project.projectRef}. Stop Rootbound first or restart it with another anchor.`);
     }
     let trustRemoval = null;
     if (opts.removeTrust) {
@@ -342,13 +351,21 @@ async function projectCommand(opts) {
       if (trustRemoval?.changed) await rollbackTrustConfig(trustRemoval).catch(() => {});
       throw error;
     }
+    const projectAccessCleanup = await revokeProjectFromSavedConnections({ paths, projectRef: project.projectRef });
     printResult({
       ok: true,
       action: "project-removed",
       project,
       trust: opts.removeTrust ? { removed: trustRemoval?.changed === true, configPath: trustRemoval?.configPath ?? null, backupPath: trustRemoval?.backupPath ?? null } : { removed: false },
+      projectAccessCleanup: {
+        revokedConnectionIds: projectAccessCleanup.changedConnectionIds,
+        failures: projectAccessCleanup.failures,
+      },
       notes: [
         "Registry state and project-scoped Rootbound records were removed by SQLite cascade.",
+        projectAccessCleanup.failures.length
+          ? `Project grant cleanup could not update ${projectAccessCleanup.failures.length} saved connection(s); stale refs remain non-authoritative because the project registry row is gone.`
+          : `Project grants were removed from ${projectAccessCleanup.changedConnectionIds.length} saved connection(s).`,
         "Project files were not changed.",
         opts.removeTrust ? "The exact-root Codex trust block was removed when present, with a backup created first." : "Codex trust configuration was not changed; pass --remove-trust to remove the exact-root trust block too.",
       ],
@@ -375,8 +392,9 @@ async function trustCommand(opts) {
   }
   const root = path.resolve(target);
   const runtime = await runtimeStatus(paths);
-  if (runtime.running && runtime.state?.projectRoot && comparableRoot(runtime.state.projectRoot) === comparableRoot(root)) {
-    throw new CliUsageError(`Refusing to remove trust for the active Rootbound project: ${root}. Switch to another project or run rootbound stop first.`);
+  const anchorProjectRoot = runtime.state?.anchorProjectRoot ?? runtime.state?.projectRoot;
+  if (runtime.running && anchorProjectRoot && comparableRoot(anchorProjectRoot) === comparableRoot(root)) {
+    throw new CliUsageError(`Refusing to remove trust for the Rootbound runtime anchor: ${root}. Stop Rootbound first or restart it with another anchor.`);
   }
   const result = await removeExactProjectTrust(root, { configPath: resolveCodexConfigPath(), backupsDir: paths.backupsDir });
   printResult({
@@ -507,7 +525,7 @@ async function askSecret(prompt) {
   input.setRawMode(true);
   input.resume();
   input.setEncoding("utf8");
-  return await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     let value = "";
     let done = false;
     const cleanup = () => {
@@ -564,8 +582,9 @@ function parseInteger(value, label, min, max) {
 function printResult(value, opts) {
   if (opts.json) process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
   else if (value.action === "connected") {
-    process.stdout.write(`\nRootbound is ready.\nProject: ${value.project.root}\nRef: ${value.project.projectRef}\nTrust: ${value.trust.changed ? "added exact-root trust" : "already trusted"}\nPermissions: ${value.permissionProfile?.changed ? `approved runtime-only ${value.permissionProfile.id}` : `using runtime-only ${value.permissionProfile?.id ?? ROOTBOUND_PERMISSION_PROFILE}`}\nTunnel: ${value.tunnel?.configured ? (value.tunnel.reused ? "reused" : "configured") : "not started"}\nRuntime: ${value.runtime?.status ?? "not started"}\n`);
-    if (value.runtime?.switched) process.stdout.write(`Switched from: ${value.runtime.switchedFromProjectRef}\n`);
+    const runtimeLabel = value.runtime ? `${value.runtime.status}${value.runtime.reused ? " (reused)" : ""}` : "not started";
+    process.stdout.write(`\nRootbound workspace ready.\nProject: ${value.project.root}\nRef: ${value.project.projectRef}\nTrust: ${value.trust.changed ? "added exact-root trust" : "already trusted"}\nPermissions: ${value.permissionProfile?.changed ? `approved runtime-only ${value.permissionProfile.id}` : `using runtime-only ${value.permissionProfile?.id ?? ROOTBOUND_PERMISSION_PROFILE}`}\nTunnel: ${value.tunnel?.configured ? (value.tunnel.reused ? "reused" : "configured") : "not started"}\nConnection access: ${value.projectAccess?.scoped ? `${value.projectAccess.projectRefs.length} workspace(s)` : "unscoped advanced mode"}\nRuntime: ${runtimeLabel}\n`);
+    if (value.runtime?.anchorProjectRoot) process.stdout.write(`Runtime anchor: ${value.runtime.anchorProjectRoot}\n`);
     if (value.runtime?.status === "running") process.stdout.write(`ChatGPT connector settings: ${TUNNEL_SETUP_URLS.connectors}\n`);
   } else if (Array.isArray(value.projects)) {
     process.stdout.write(`Runtime: ${value.runtime.status}\nState: ${value.stateRoot}\nProjects: ${value.projects.length}\n`);
@@ -574,5 +593,11 @@ function printResult(value, opts) {
 }
 
 function printHelp() {
-  process.stdout.write(`Rootbound V5 control plane\n\nUsage:\n  rootbound connect [path] [--yes] [--no-start] [--json]\n  rootbound start [path] [--json]\n  rootbound status [path] [--json]\n  rootbound project list [--json]\n  rootbound project remove <project-ref-or-path> [--remove-trust] [--json]\n  rootbound trust remove <path> [--json]\n  rootbound doctor [path] [--json]\n  rootbound logs [--bytes N] [--follow] [--json]\n  rootbound stop [--force] [--json]\n  rootbound version\n\nFor normal setup, run only: rootbound connect .\nThe interactive wizard detects/reuses an OpenAI tunnel, stores the runtime key in private local state when needed, validates the tunnel, asks once for exact-root Codex trust, and starts the supervised runtime. Connecting or starting another trusted project automatically switches the single supervised runtime; no manual stop is required.\nUse rootbound project remove to forget stale registry entries without deleting project files; add --remove-trust to remove that exact-root Codex trust block too. Use rootbound trust remove for stale trust blocks that no longer have a registry row.\nUse rootbound tunnel ... only for advanced/manual tunnel configuration.\n`);
+  process.stdout.write(`Rootbound V5 control plane\n\nUsage:\n  rootbound connect [path] [--yes] [--no-start] [--json]\n  rootbound start [path] [--json]\n  rootbound status [path] [--json]\n  rootbound project list [--json]\n  rootbound project remove <project-ref-or-path> [--remove-trust] [--json]\n  rootbound trust remove <path> [--json]\n  rootbound doctor [path] [--json]\n  rootbound logs [--bytes N] [--follow] [--json]\n  rootbound stop [--force] [--json]\n  rootbound version\n\nFor normal setup, run only: rootbound connect .\nThe interactive wizard detects/reuses an OpenAI tunnel, stores the runtime key in private local state when needed, validates the tunnel, asks once for exact-root Codex trust, grants the project to the active Rootbound connection, and starts the shared supervised runtime when needed. Connecting additional trusted projects reuses that runtime; no project switch or restart is required.\nUse rootbound project remove to forget stale registry entries without deleting project files; saved-connection project grants are cleaned up as part of removal. Add --remove-trust to remove that exact-root Codex trust block too. Use rootbound trust remove for stale trust blocks that no longer have a registry row.\nUse rootbound tunnel ... only for advanced/manual tunnel configuration.\n`);
+}
+
+function controlPlaneError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
