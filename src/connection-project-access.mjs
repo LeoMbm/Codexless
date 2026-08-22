@@ -18,12 +18,16 @@ export async function loadConnectionProjectAccess({ paths } = {}) {
   }
 }
 
-export async function grantConnectionProjectAccess({ paths, projectRef, now = Date.now } = {}) {
+export async function grantConnectionProjectAccess({ paths, projectRef, seedProjectRefs = [], now = Date.now } = {}) {
   validateProjectRef(projectRef);
+  if (!Array.isArray(seedProjectRefs)) throw new Error("seedProjectRefs must be an array");
+  for (const seed of seedProjectRefs) validateProjectRef(seed);
   return withAccessLock(paths, async () => {
     const current = await loadConnectionProjectAccess({ paths });
-    if (current.projectRefs.includes(projectRef)) return { access: current, changed: false };
-    const next = { schemaVersion: SCHEMA_VERSION, projectRefs: [...current.projectRefs, projectRef].sort(), updatedAt: now() };
+    const base = current.updatedAt === null ? seedProjectRefs : [];
+    const projectRefs = [...new Set([...current.projectRefs, ...base, projectRef])].sort();
+    if (current.updatedAt !== null && projectRefs.length === current.projectRefs.length && projectRefs.every((value, index) => value === current.projectRefs[index])) return { access: current, changed: false };
+    const next = { schemaVersion: SCHEMA_VERSION, projectRefs, updatedAt: now() };
     await writeAccess(paths, next);
     return { access: next, changed: true };
   });

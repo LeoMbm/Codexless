@@ -40,7 +40,7 @@ let restarts = 0;
 
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
-log(`supervisor start pid=${process.pid} project=${projectRef ?? "none"} connection=${connection.id} tunnel=${connection.tunnelId ?? "unknown"} tunnelSource=${launch.source ?? "unknown"}`);
+log(`supervisor start pid=${process.pid} anchorProject=${projectRef ?? "none"} connection=${connection.id} tunnel=${connection.tunnelId ?? "unknown"} tunnelSource=${launch.source ?? "unknown"}`);
 await startChild();
 
 async function startChild() {
@@ -67,10 +67,7 @@ async function startChild() {
 
   const requiresReadiness = connection.storageKind === "scoped-v1";
   if (!requiresReadiness) await writeRuntimeState(paths, runtimeValue({ status: "starting", ready: false, startedAt }));
-  const readiness = await waitForTunnelReadiness({
-    healthUrlPath: connectionPaths.tunnelHealthUrlPath,
-    timeoutMs: requiresReadiness ? 4_000 : 10_000,
-  });
+  const readiness = await waitForTunnelReadiness({ healthUrlPath: connectionPaths.tunnelHealthUrlPath, timeoutMs: requiresReadiness ? 4_000 : 10_000 });
   if (!readiness.ok && requiresReadiness) {
     try { child.kill("SIGTERM"); } catch {}
     throw new Error(`Tunnel did not become ready: ${readiness.error}`);
@@ -92,6 +89,9 @@ function runtimeValue({ status, ready, startedAt, readyAt = null, legacyReadines
     tunnelPid: child?.pid ?? null,
     startedAt,
     readyAt,
+    scopeMode: "multi-project",
+    anchorProjectRef: projectRef,
+    anchorProjectRoot: projectRoot,
     projectRef,
     projectRoot,
     connectionId: connection.id,
@@ -164,14 +164,6 @@ async function shutdown(signal) {
   process.exit(0);
 }
 
-function explicitConnectionEnvironment(env) {
-  const clean = { ...env };
-  delete clean.ROOTBOUND_TUNNEL_ARGV_JSON;
-  return clean;
-}
+function explicitConnectionEnvironment(env) { const clean = { ...env }; delete clean.ROOTBOUND_TUNNEL_ARGV_JSON; return clean; }
 function log(message) { logHandle.write(`${new Date().toISOString()} [${runtimeId}] ${message}\n`); }
-function parseBoundedInt(value, min, max, label) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || String(parsed) !== String(value) || parsed < min || parsed > max) throw new Error(`${label} must be an integer between ${min} and ${max}`);
-  return parsed;
-}
+function parseBoundedInt(value, min, max, label) { const parsed = Number.parseInt(value, 10); if (!Number.isInteger(parsed) || String(parsed) !== String(value) || parsed < min || parsed > max) throw new Error(`${label} must be an integer between ${min} and ${max}`); return parsed; }

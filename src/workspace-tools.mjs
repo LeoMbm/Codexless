@@ -136,7 +136,6 @@ export async function openWorkspace({ cwd = null, projectRef = null, store, auth
 export function createRuntimeProjectAccessProvider({ store, env = process.env, paths = resolveRootboundPaths({ env }) } = {}) {
   if (!store) throw new Error("runtime project access provider requires store");
   const requestedConnectionId = typeof env.ROOTBOUND_CONNECTION_ID === "string" && env.ROOTBOUND_CONNECTION_ID.trim() ? env.ROOTBOUND_CONNECTION_ID.trim() : null;
-  const bootstrapProjectRef = typeof env.ROOTBOUND_PROJECT_REF === "string" && env.ROOTBOUND_PROJECT_REF.trim() ? env.ROOTBOUND_PROJECT_REF.trim() : null;
 
   return async function runtimeProjectAccess() {
     if (requestedConnectionId === "connection_environment") {
@@ -160,10 +159,11 @@ export function createRuntimeProjectAccessProvider({ store, env = process.env, p
     const access = await loadConnectionProjectAccess({ paths: connectionPaths });
     let projectRefs = access.projectRefs;
     let migrationFallback = false;
-    if (access.updatedAt === null && bootstrapProjectRef && store.getProject(bootstrapProjectRef)) {
-      projectRefs = [bootstrapProjectRef];
-      migrationFallback = true;
+    if (access.updatedAt === null && registry.connections.length === 1) {
+      projectRefs = store.listProjects().filter((project) => project.trusted === true).map((project) => project.projectRef).sort();
+      migrationFallback = projectRefs.length > 0;
     }
+    if (access.updatedAt === null && registry.connections.length > 1) projectRefs = [];
     return { enforced: true, connectionId: connection.id, projectRefs, migrationFallback };
   };
 }
