@@ -6,6 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getActiveConnection, getConnection, loadConnectionRegistry } from "../src/connection-registry.mjs";
 import { resolveConnectionPaths } from "../src/connection-paths.mjs";
+import { assertRuntimeProjectAllowed } from "../src/runtime-project-lifecycle.mjs";
 import { ensureRootboundStateDirs, resolveRootboundPaths } from "../src/state-paths.mjs";
 import { clearRuntimeState, writeRuntimeState } from "../src/runtime-state.mjs";
 import { resolveTunnelLaunch } from "../src/tunnel-config.mjs";
@@ -26,8 +27,10 @@ const connection = persistentConnection ?? (process.env.ROOTBOUND_TUNNEL_ARGV_JS
   tunnelId: null,
 } : null);
 if (!connection) throw new Error("No active Rootbound connection; run `rootbound connect .` first.");
+if (!projectRef || !projectRoot) throw new Error("Rootbound supervisor requires an anchor project identity.");
 const environmentOnlyConnection = connection.source === "environment" && !persistentConnection;
 const connectionPaths = environmentOnlyConnection ? paths : resolveConnectionPaths({ paths, connection });
+if (!environmentOnlyConnection) await assertRuntimeProjectAllowed({ paths, registry, connection, projectRef });
 const runtimeId = `runtime_${randomUUID()}`;
 const restartLimit = parseBoundedInt(process.env.ROOTBOUND_TUNNEL_RESTART_LIMIT ?? "3", 0, 20, "ROOTBOUND_TUNNEL_RESTART_LIMIT");
 const launchEnv = requestedConnection ? explicitConnectionEnvironment(process.env) : process.env;
@@ -40,14 +43,14 @@ let restarts = 0;
 
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
-log(`supervisor start pid=${process.pid} anchorProject=${projectRef ?? "none"} connection=${connection.id} tunnel=${connection.tunnelId ?? "unknown"} tunnelSource=${launch.source ?? "unknown"}`);
+log(`supervisor start pid=${process.pid} anchorProject=${projectRef} connection=${connection.id} tunnel=${connection.tunnelId ?? "unknown"} tunnelSource=${launch.source ?? "unknown"}`);
 await startChild();
 
 async function startChild() {
   const startedAt = Date.now();
   if (connectionPaths.tunnelHealthUrlPath) await unlink(connectionPaths.tunnelHealthUrlPath).catch((error) => { if (error?.code !== "ENOENT") throw error; });
   child = spawn(launch.command, launch.args, {
-    cwd: projectRoot ?? packageRoot,
+    cwd: projectRoot,
     env: {
       ...childBaseEnv,
       ROOTBOUND_STDIO_NODE: process.execPath,

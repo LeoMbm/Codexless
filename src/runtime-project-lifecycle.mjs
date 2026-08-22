@@ -39,6 +39,23 @@ export async function allowedProjectsForCurrentConnection({ paths, store, env = 
   return { ...context, projectRefs: refs, projects: projects.filter((project) => allowed.has(project.projectRef)) };
 }
 
+export async function assertRuntimeProjectAllowed({ paths, registry, connection, projectRef } = {}) {
+  if (!paths || !registry || !connection || typeof projectRef !== "string" || !projectRef) throw new Error("runtime project access check requires paths, registry, connection, and projectRef");
+  if (connection.source === "environment") return { allowed: true, scoped: false, migrationFallback: false };
+  const connectionPaths = resolveConnectionPaths({ paths, connection });
+  const access = await loadConnectionProjectAccess({ paths: connectionPaths });
+  if (access.updatedAt === null && registry.connections.length === 1) {
+    return { allowed: true, scoped: true, migrationFallback: true };
+  }
+  if (!access.projectRefs.includes(projectRef)) {
+    const error = new Error(`Project ${projectRef} is not allowed for Rootbound connection ${connection.name}.`);
+    error.code = "PROJECT_NOT_ALLOWED_FOR_CONNECTION";
+    error.nextActions = ["Stop Rootbound, switch to the target connection, run rootbound connect . from an intended project, then retry the connection switch."];
+    throw error;
+  }
+  return { allowed: true, scoped: true, migrationFallback: false };
+}
+
 export function runtimeMatchesConnection(runtime, connectionId) {
   return Boolean(runtime?.running && connectionId && runtime.state?.connectionId === connectionId);
 }
