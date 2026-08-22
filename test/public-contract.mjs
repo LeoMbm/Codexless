@@ -40,13 +40,13 @@ function createIsolatedPublicTestEnv(extra = {}) {
   return env;
 }
 
-assert.equal(PUBLIC_SURFACE_VERSION, "rootbound-public-preview-v5");
-assert.ok(PUBLIC_TOOL_NAMES.length >= 27);
+assert.equal(PUBLIC_SURFACE_VERSION, "rootbound-public-preview-v6");
+assert.ok(PUBLIC_TOOL_NAMES.length >= 33);
 assert.equal(new Set(PUBLIC_TOOL_NAMES).size, PUBLIC_TOOL_NAMES.length);
 
 const requiredNames = [
   "codex.command_start", "codex.command_poll", "codex.command_write", "codex.command_terminate",
-  "codex.workspace_open", "codex.precise_edit", "codex.edit_undo", "codex.edit_redo",
+  "codex.workspace_list", "codex.workspace_open", "codex.precise_edit", "codex.edit_undo", "codex.edit_redo",
   "codex.continuity_resume", "codex.quota_status", "codex.continuity_handoff", "codex.continuity_rollback", "codex.continuity_search",
 ];
 const forbiddenNames = [
@@ -61,7 +61,7 @@ async function assertPublicSurface(client) {
   const names = tools.tools.map((tool) => tool.name);
   assert.equal(names.length, PUBLIC_TOOL_NAMES.length);
   assert.deepEqual([...names].sort(), [...PUBLIC_TOOL_NAMES].sort());
-  for (const name of requiredNames) assert.equal(names.includes(name), true, `${name} must be exposed by V5 surface`);
+  for (const name of requiredNames) assert.equal(names.includes(name), true, `${name} must be exposed by V6 surface`);
   for (const name of forbiddenNames) assert.equal(names.includes(name), false, `${name} must not be exposed by ChatGPT-only surface`);
   assert.equal(names.some((name) => name.startsWith("codex.agent_")), false);
 
@@ -70,6 +70,7 @@ async function assertPublicSurface(client) {
   const commandPollTool = tools.tools.find((tool) => tool.name === "codex.command_poll");
   const commandWriteTool = tools.tools.find((tool) => tool.name === "codex.command_write");
   const commandTerminateTool = tools.tools.find((tool) => tool.name === "codex.command_terminate");
+  const workspaceListTool = tools.tools.find((tool) => tool.name === "codex.workspace_list");
   const workspaceTool = tools.tools.find((tool) => tool.name === "codex.workspace_open");
   const undoTool = tools.tools.find((tool) => tool.name === "codex.edit_undo");
   const redoTool = tools.tools.find((tool) => tool.name === "codex.edit_redo");
@@ -89,6 +90,7 @@ async function assertPublicSurface(client) {
   assert.equal(commandPollTool?.annotations?.readOnlyHint, true);
   assert.equal(commandWriteTool?.annotations?.destructiveHint, true);
   assert.equal(commandTerminateTool?.annotations?.destructiveHint, true);
+  assert.equal(workspaceListTool?.annotations?.readOnlyHint, true);
   assert.equal(workspaceTool?.annotations?.readOnlyHint, true);
   assert.equal(undoTool?.annotations?.destructiveHint, true);
   assert.equal(redoTool?.annotations?.destructiveHint, true);
@@ -106,6 +108,7 @@ async function assertPublicSurface(client) {
   assert.match(commandPollTool?.description ?? "", /incremental/i);
   assert.match(commandWriteTool?.description ?? "", /stdin/i);
   assert.match(commandTerminateTool?.description ?? "", /terminate/i);
+  assert.match(workspaceListTool?.description ?? "", /workspace/i);
   assert.match(workspaceTool?.description ?? "", /never creates|never.*trust|does not.*trust/i);
   assert.match(undoTool?.description ?? "", /hash|SHA/i);
   assert.match(redoTool?.description ?? "", /hash|SHA/i);
