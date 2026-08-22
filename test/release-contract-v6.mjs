@@ -18,6 +18,7 @@ const rescueTools = await readFile(path.join(root, "src", "rescue-tools.mjs"), "
 const controlPlane = await readFile(path.join(root, "bin", "rootbound.mjs"), "utf8");
 const supervisor = await readFile(path.join(root, "scripts", "supervisor.mjs"), "utf8");
 const commandWorker = await readFile(path.join(root, "scripts", "command-worker.mjs"), "utf8");
+const doctor = await readFile(path.join(root, "scripts", "doctor.mjs"), "utf8");
 
 assert.equal(packageJson.version, "0.1.0-preview.3");
 assert.equal(shrinkwrap.version, packageJson.version);
@@ -73,6 +74,10 @@ assert.match(commandWorker, /createRuntimeProjectAccessProvider/);
 assert.match(commandWorker, /createConnectionScopedAuthorityExecutor/);
 assert.match(commandWorker, /executor\.resolveAuthority\(\{ cwd: command\.cwd/);
 assert.match(commandWorker, /executor\.exec\(\{ command: command\.argv, cwd: command\.cwd/);
+assert.match(doctor, /versionedSurface/);
+assert.match(doctor, /PUBLIC_SURFACE_VERSION.*contract is internally consistent/);
+assert.doesNotMatch(doctor, /PUBLIC_SURFACE_VERSION\s*===\s*["']rootbound-public-preview-v\d+["']/);
+assert.doesNotMatch(doctor, /V5 surface contract/);
 
 assert.match(publicServerFactory, /codex\.workspace_list first/);
 assert.match(publicServerFactory, /Never treat the runtime anchor/);

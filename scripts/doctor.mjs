@@ -44,13 +44,14 @@ const supportedPlatform = process.platform === "win32" || (process.platform === 
 const dynamicMacCompatibility = process.platform === "darwin" && process.arch === "arm64";
 record("platform", supportedPlatform, supportedPlatform ? `${process.platform}/${process.arch}` : `Unsupported platform: ${process.platform}/${process.arch}`);
 const nodeSupported = compareVersion(process.versions.node, "22.13.0") >= 0;
-record("node", nodeSupported, `Node ${process.version}`, nodeSupported ? null : "Node.js >=22.13.0 is required by the V5 SQLite state layer");
+record("node", nodeSupported, `Node ${process.version}`, nodeSupported ? null : "Node.js >=22.13.0 is required by the Rootbound SQLite state layer");
 
 const forbiddenModelTools = PUBLIC_TOOL_NAMES.filter((name) => name === "codex.account_preflight" || name === "codex.model_list" || name.startsWith("codex.agent_"));
 const uniqueToolNames = new Set(PUBLIC_TOOL_NAMES).size === PUBLIC_TOOL_NAMES.length;
-const expectedSurface = PUBLIC_SURFACE_VERSION === "rootbound-public-preview-v5" && uniqueToolNames && PUBLIC_TOOL_NAMES.length > 0;
-record("public-surface", expectedSurface && forbiddenModelTools.length === 0, `${PUBLIC_SURFACE_VERSION}; ${PUBLIC_TOOL_NAMES.length} tools; modelLane=chatgpt-only`, forbiddenModelTools.length ? `Forbidden Codex model tools exposed: ${forbiddenModelTools.join(", ")}` : !uniqueToolNames ? "Public tool list contains duplicate names" : "Expected a non-empty unique ChatGPT-only V5 public surface");
-record("surface-compatibility", expectedSurface, expectedSurface ? `V5 surface contract is internally consistent (${PUBLIC_TOOL_NAMES.length} tools)` : "Surface contract is stale or incomplete", expectedSurface ? null : "Restart/reconnect the Rootbound MCP connection after upgrading so ChatGPT refreshes its cached tool snapshot");
+const versionedSurface = /^rootbound-public-preview-v\d+$/.test(PUBLIC_SURFACE_VERSION);
+const expectedSurface = versionedSurface && uniqueToolNames && PUBLIC_TOOL_NAMES.length > 0;
+record("public-surface", expectedSurface && forbiddenModelTools.length === 0, `${PUBLIC_SURFACE_VERSION}; ${PUBLIC_TOOL_NAMES.length} tools; modelLane=chatgpt-only`, forbiddenModelTools.length ? `Forbidden Codex model tools exposed: ${forbiddenModelTools.join(", ")}` : !versionedSurface ? "Public surface version is not a supported versioned Rootbound preview identifier" : !uniqueToolNames ? "Public tool list contains duplicate names" : "Expected a non-empty unique ChatGPT-only public surface");
+record("surface-compatibility", expectedSurface, expectedSurface ? `${PUBLIC_SURFACE_VERSION} contract is internally consistent (${PUBLIC_TOOL_NAMES.length} tools)` : "Surface contract is stale or incomplete", expectedSurface ? null : "Restart/reconnect the Rootbound MCP connection after upgrading so ChatGPT refreshes its cached tool snapshot");
 
 await checkConnections();
 
