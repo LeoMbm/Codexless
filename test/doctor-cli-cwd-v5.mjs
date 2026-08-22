@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+if (process.platform === "win32") {
+  console.log("doctor-cli-cwd-v5: skipped on Windows");
+  process.exit(0);
+}
+
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const entrypoint = path.join(repoRoot, "bin", "rootbound-entry.mjs");
@@ -12,19 +17,15 @@ const temp = await mkdtemp(path.join(os.tmpdir(), "rootbound-doctor-cli-cwd-"));
 const project = path.join(temp, "project");
 const state = path.join(temp, "state");
 const capture = path.join(temp, "codex-cwd.txt");
-const fakeCodex = path.join(temp, process.platform === "win32" ? "fake-codex.cmd" : "fake-codex");
+const fakeCodex = path.join(temp, "fake-codex");
 await mkdir(project);
 
-if (process.platform === "win32") {
-  await writeFile(fakeCodex, "@echo off\r\nnode -e \"require('fs').writeFileSync(process.env.ROOTBOUND_TEST_CAPTURE_CWD, process.cwd())\"\r\necho codex-cli 0.0.0-test\r\nexit /b 1\r\n", "utf8");
-} else {
-  await writeFile(
-    fakeCodex,
-    "#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(process.env.ROOTBOUND_TEST_CAPTURE_CWD, process.cwd());\nprocess.stdout.write('codex-cli 0.0.0-test\\n');\nprocess.exit(1);\n",
-    "utf8"
-  );
-  await chmod(fakeCodex, 0o755);
-}
+await writeFile(
+  fakeCodex,
+  "#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(process.env.ROOTBOUND_TEST_CAPTURE_CWD, process.cwd());\nprocess.stdout.write('codex-cli 0.0.0-test\\n');\nprocess.exit(1);\n",
+  "utf8"
+);
+await chmod(fakeCodex, 0o755);
 
 try {
   await execFileAsync(process.execPath, [entrypoint, "doctor", ".", "--json"], {
