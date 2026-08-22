@@ -23,6 +23,12 @@ if (command === "help" || command === "--help" || command === "-h") {
     forwarded.unshift("--cwd", project);
   }
   process.exitCode = await runScript("self-test.mjs", forwarded);
+} else if (command === "doctor") {
+  const projectIndex = args.findIndex((value, index) => index > 0 && !value.startsWith("-"));
+  if (projectIndex >= 0) {
+    process.argv[projectIndex + 2] = path.resolve(process.cwd(), args[projectIndex]);
+  }
+  await import("./rootbound.mjs");
 } else if (command === "upgrade") {
   process.exitCode = await runScript("upgrade.mjs", args.slice(1));
 } else if (command === "diagnostic" || command === "diagnostics") {
