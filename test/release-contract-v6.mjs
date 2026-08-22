@@ -42,6 +42,7 @@ for (const relative of [
   "test/workspace-multiproject-v5.mjs",
   "test/runtime-project-lifecycle-v5.mjs",
   "test/connection-scoped-runtime-v5.mjs",
+  "test/public-multiproject-scope-v6.mjs",
   "test/multi-project-public-surface-v6.mjs",
 ]) await access(path.join(root, relative));
 
@@ -51,12 +52,14 @@ for (const testName of [
   "workspace-multiproject-v5.mjs",
   "runtime-project-lifecycle-v5.mjs",
   "connection-scoped-runtime-v5.mjs",
+  "public-multiproject-scope-v6.mjs",
   "multi-project-public-surface-v6.mjs",
   "release-contract-v6.mjs",
 ]) {
   assert.match(packageJson.scripts?.["test:v5"] ?? "", new RegExp(testName.replaceAll(".", "\\.")), `test:v5 must include ${testName}`);
   assert.match(packageJson.scripts?.test ?? "", new RegExp(testName.replaceAll(".", "\\.")), `npm test must include ${testName}`);
 }
+assert.match(packageJson.scripts?.["test:contract"] ?? "", /public-multiproject-scope-v6\.mjs/);
 assert.doesNotMatch(packageJson.scripts?.["test:v5"] ?? "", /release-contract-v5\.mjs/);
 assert.doesNotMatch(packageJson.scripts?.test ?? "", /release-contract-v5\.mjs/);
 assert.ok(packageJson.files?.includes("docs/multi-project-runtime.md"));
