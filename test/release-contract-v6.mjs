@@ -70,7 +70,9 @@ assert.match(controlPlane, /projectAccessCleanup/);
 assert.match(supervisor, /assertRuntimeProjectAllowed/);
 assert.match(supervisor, /anchorProjectRef/);
 assert.match(commandWorker, /createRuntimeProjectAccessProvider/);
-assert.match(commandWorker, /resolveScopedCwd/);
+assert.match(commandWorker, /createConnectionScopedAuthorityExecutor/);
+assert.match(commandWorker, /executor\.resolveAuthority\(\{ cwd: command\.cwd/);
+assert.match(commandWorker, /executor\.exec\(\{ command: command\.argv, cwd: command\.cwd/);
 
 assert.match(publicServerFactory, /codex\.workspace_list first/);
 assert.match(publicServerFactory, /Never treat the runtime anchor/);
