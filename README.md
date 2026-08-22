@@ -50,6 +50,7 @@ The public MCP contract is now **33 tools** on `rootbound-public-preview-v6`.
 - long commands retain their durable `projectRef` / `cwd` identity;
 - the detached Windows command worker independently revalidates connection scope before execution;
 - connection switching validates the current runtime anchor on the target connection and can roll back transactionally on failure;
+- `rootbound stop` and `rootbound stop --force` terminate the complete detached runtime process tree — supervisor, tunnel and MCP child — so stale MCP servers cannot survive a normal restart or upgrade;
 - existing one-connection installs can migrate trusted registered projects to that single connection, but no implicit grant migration occurs once multiple saved connections exist.
 
 See [`docs/multi-project-runtime.md`](docs/multi-project-runtime.md) for routing, errors, retries, concurrency and the real-Mac acceptance test.
@@ -271,6 +272,8 @@ rootbound status
 rootbound stop
 ```
 
+Both normal and forced stops operate on the complete detached runtime process tree. Use `rootbound stop --force` for a wedged runtime; Rootbound still terminates the tracked supervisor, tunnel and MCP child rather than intentionally leaving a stale connector process behind.
+
 See [`docs/multi-project-runtime.md`](docs/multi-project-runtime.md) for routing, migration, retry, concurrency and smoke-test details.
 
 ## Multiple tunnel connections
@@ -343,6 +346,7 @@ rootbound connect .
 rootbound start /path/to/project
 rootbound status
 rootbound stop
+rootbound stop --force
 
 rootbound project list
 rootbound project remove /path/to/project
@@ -458,6 +462,7 @@ Rootbound is intentionally fail-closed.
 - connection runtime keys stay outside registry metadata, normal logs, diagnostics, and public status output;
 - new scoped tunnel connections require `/readyz` before becoming active;
 - connection switches, repair, removal, start/stop, and tunnel mutation are serialized to avoid runtime races;
+- runtime shutdown tracks the supervisor and tunnel and terminates the complete detached process tree, preventing an old MCP server from continuing to serve stale code after a restart or upgrade;
 - common secret-bearing files are excluded from ordinary read/search flows unless explicitly requested;
 - diagnostics redact credentials, home paths, and sensitive thread information;
 - drift and rollback conflicts stop instead of guessing;
@@ -515,6 +520,16 @@ rootbound connection current
 Make sure ChatGPT is using the same tunnel ID as the active Rootbound connection.
 
 After changing `rootbound-public-preview-*`, reconnect the ChatGPT connector/app to refresh its cached MCP tool snapshot.
+
+## More than one Rootbound MCP process after a restart
+
+A healthy single Rootbound runtime should normally have one `launch.mjs stdio` MCP process behind its tunnel. On macOS you can inspect it with:
+
+```sh
+ps -axo pid=,ppid=,pgid=,command= | grep '[s]cripts/launch.mjs stdio'
+```
+
+Current builds stop the complete runtime process tree, including forced stops. Older Technical Preview builds could leave a tunnel/MCP process alive after a forced supervisor kill; after upgrading, stop the runtime with the current `rootbound stop --force` before reconnecting ChatGPT. If an orphan from an older build is no longer represented in Rootbound runtime state, terminate that stale process group once or restart the user session before starting the new runtime.
 
 ## `PROJECT_SCOPE_REQUIRED`
 
@@ -601,7 +616,7 @@ npm test
 npm run validate:release
 ```
 
-For the multi-project release, also run the real-Mac smoke test in [`docs/multi-project-runtime.md`](docs/multi-project-runtime.md) before merge.
+For the multi-project release, also run the real-Mac smoke test in [`docs/multi-project-runtime.md`](docs/multi-project-runtime.md) before merge. The smoke must confirm workspace discovery, cross-project isolation, `PROJECT_SCOPE_REQUIRED` for unscoped calls, persistence across restart, and that a stop/restart leaves only the newly started runtime/tunnel/MCP process tree.
 
 Probe the currently installed Codex build explicitly:
 
