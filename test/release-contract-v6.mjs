@@ -13,6 +13,7 @@ const multiProjectDoc = await readFile(path.join(root, "docs", "multi-project-ru
 const workspaceTools = await readFile(path.join(root, "src", "workspace-tools.mjs"), "utf8");
 const scopedRuntime = await readFile(path.join(root, "src", "connection-scoped-runtime.mjs"), "utf8");
 const runtimeLifecycle = await readFile(path.join(root, "src", "runtime-project-lifecycle.mjs"), "utf8");
+const runtimeState = await readFile(path.join(root, "src", "runtime-state.mjs"), "utf8");
 const projectToolScopeGuard = await readFile(path.join(root, "src", "project-tool-scope-guard.mjs"), "utf8");
 const publicServerFactory = await readFile(path.join(root, "src", "public-server-factory.mjs"), "utf8");
 const rescueTools = await readFile(path.join(root, "src", "rescue-tools.mjs"), "utf8");
@@ -71,6 +72,10 @@ assert.match(workspaceTools, /PROJECT_SCOPE_REQUIRED|resolveProjectScope/);
 assert.match(scopedRuntime, /resolveScopedCwd/);
 assert.match(scopedRuntime, /PROJECT_SCOPE_REQUIRED|resolveProjectScope/);
 assert.match(runtimeLifecycle, /revokeProjectFromSavedConnections/);
+assert.match(runtimeState, /for \(const groupId of \[supervisorPid, tunnelPid\]\)/);
+assert.match(runtimeState, /process\.kill\(-groupId, signal\)/);
+assert.match(runtimeState, /execFileAsync\("taskkill", \["\/PID", String\(rootPid\), "\/T"/);
+assert.match(runtimeState, /!isProcessAlive\(supervisorPid\) && !isProcessAlive\(tunnelPid\)/);
 assert.match(controlPlane, /revokeProjectFromSavedConnections/);
 assert.match(controlPlane, /projectAccessCleanup/);
 assert.match(supervisor, /assertRuntimeProjectAllowed/);
