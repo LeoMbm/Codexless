@@ -339,9 +339,16 @@ function isAmbiguous(first, second) {
 }
 
 async function resolveAuthorizedProject({ cwd, authorityExecutor, stateStore }) {
-  const requested = cwd ?? authorityExecutor.defaultCwd ?? process.cwd();
-  const resolved = await resolveProjectRoot(requested);
-  const authority = await authorityExecutor.resolveAuthority({ cwd: resolved.root, access: "readOnly", timeoutMs: 10_000 });
+  const authority = await authorityExecutor.resolveAuthority({ cwd: cwd ?? null, access: "readOnly", timeoutMs: 10_000 });
+  if (!authority?.effectiveCwd) {
+    throw new RootboundToolError("Rootbound continuity could not resolve an authorized project scope.", {
+      code: "PROJECT_SCOPE_UNAVAILABLE",
+      category: "state",
+      retryable: false,
+      nextActions: ["Call codex.workspace_list, then retry codex.continuity_resume with the intended project cwd."],
+    });
+  }
+  const resolved = await resolveProjectRoot(authority.effectiveCwd);
   if (!authority.trustedAncestor || !samePath(authority.trustedAncestor, resolved.root)) {
     throw new RootboundToolError(`Rootbound continuity requires exact-root Codex trust for ${resolved.root}.`, {
       code: "EXACT_ROOT_TRUST_REQUIRED", category: "permission", retryable: false,

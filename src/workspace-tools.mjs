@@ -18,6 +18,17 @@ export function registerWorkspaceTools(server, { store, authorityExecutor, publi
   const effectiveAccessProvider = projectAccessProvider ?? createRuntimeProjectAccessProvider({ store });
 
   server.registerTool(
+    "codex.workspace_list",
+    {
+      title: "List Rootbound Workspaces",
+      description: "List only the local project workspaces allowed for the current Rootbound connection. This is read-only, starts no Codex model turn, and never widens trust or connection access.",
+      inputSchema: z.object({}).strict(),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async () => typedToolResponse(() => listWorkspaces({ store, projectAccessProvider: effectiveAccessProvider }), { operation: "workspace_list" })
+  );
+
+  server.registerTool(
     "codex.workspace_open",
     {
       title: "Open Rootbound Workspace",

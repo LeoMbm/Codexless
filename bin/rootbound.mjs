@@ -14,6 +14,7 @@ import {
   allowedProjectsForCurrentConnection,
   grantProjectForCurrentConnection,
   resolveControlPlaneConnection,
+  revokeProjectFromSavedConnections,
   runtimeMatchesConnection,
 } from "../src/runtime-project-lifecycle.mjs";
 import {
@@ -350,13 +351,21 @@ async function projectCommand(opts) {
       if (trustRemoval?.changed) await rollbackTrustConfig(trustRemoval).catch(() => {});
       throw error;
     }
+    const projectAccessCleanup = await revokeProjectFromSavedConnections({ paths, projectRef: project.projectRef });
     printResult({
       ok: true,
       action: "project-removed",
       project,
       trust: opts.removeTrust ? { removed: trustRemoval?.changed === true, configPath: trustRemoval?.configPath ?? null, backupPath: trustRemoval?.backupPath ?? null } : { removed: false },
+      projectAccessCleanup: {
+        revokedConnectionIds: projectAccessCleanup.changedConnectionIds,
+        failures: projectAccessCleanup.failures,
+      },
       notes: [
         "Registry state and project-scoped Rootbound records were removed by SQLite cascade.",
+        projectAccessCleanup.failures.length
+          ? `Project grant cleanup could not update ${projectAccessCleanup.failures.length} saved connection(s); stale refs remain non-authoritative because the project registry row is gone.`
+          : `Project grants were removed from ${projectAccessCleanup.changedConnectionIds.length} saved connection(s).`,
         "Project files were not changed.",
         opts.removeTrust ? "The exact-root Codex trust block was removed when present, with a backup created first." : "Codex trust configuration was not changed; pass --remove-trust to remove the exact-root trust block too.",
       ],
@@ -584,7 +593,7 @@ function printResult(value, opts) {
 }
 
 function printHelp() {
-  process.stdout.write(`Rootbound V5 control plane\n\nUsage:\n  rootbound connect [path] [--yes] [--no-start] [--json]\n  rootbound start [path] [--json]\n  rootbound status [path] [--json]\n  rootbound project list [--json]\n  rootbound project remove <project-ref-or-path> [--remove-trust] [--json]\n  rootbound trust remove <path> [--json]\n  rootbound doctor [path] [--json]\n  rootbound logs [--bytes N] [--follow] [--json]\n  rootbound stop [--force] [--json]\n  rootbound version\n\nFor normal setup, run only: rootbound connect .\nThe interactive wizard detects/reuses an OpenAI tunnel, stores the runtime key in private local state when needed, validates the tunnel, asks once for exact-root Codex trust, grants the project to the active Rootbound connection, and starts the shared supervised runtime when needed. Connecting additional trusted projects reuses that runtime; no project switch or restart is required.\nUse rootbound project remove to forget stale registry entries without deleting project files; add --remove-trust to remove that exact-root Codex trust block too. Use rootbound trust remove for stale trust blocks that no longer have a registry row.\nUse rootbound tunnel ... only for advanced/manual tunnel configuration.\n`);
+  process.stdout.write(`Rootbound V5 control plane\n\nUsage:\n  rootbound connect [path] [--yes] [--no-start] [--json]\n  rootbound start [path] [--json]\n  rootbound status [path] [--json]\n  rootbound project list [--json]\n  rootbound project remove <project-ref-or-path> [--remove-trust] [--json]\n  rootbound trust remove <path> [--json]\n  rootbound doctor [path] [--json]\n  rootbound logs [--bytes N] [--follow] [--json]\n  rootbound stop [--force] [--json]\n  rootbound version\n\nFor normal setup, run only: rootbound connect .\nThe interactive wizard detects/reuses an OpenAI tunnel, stores the runtime key in private local state when needed, validates the tunnel, asks once for exact-root Codex trust, grants the project to the active Rootbound connection, and starts the shared supervised runtime when needed. Connecting additional trusted projects reuses that runtime; no project switch or restart is required.\nUse rootbound project remove to forget stale registry entries without deleting project files; saved-connection project grants are cleaned up as part of removal. Add --remove-trust to remove that exact-root Codex trust block too. Use rootbound trust remove for stale trust blocks that no longer have a registry row.\nUse rootbound tunnel ... only for advanced/manual tunnel configuration.\n`);
 }
 
 function controlPlaneError(code, message) {

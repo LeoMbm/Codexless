@@ -1,4 +1,4 @@
-import { grantConnectionProjectAccess, loadConnectionProjectAccess } from "./connection-project-access.mjs";
+import { grantConnectionProjectAccess, loadConnectionProjectAccess, revokeConnectionProjectAccess } from "./connection-project-access.mjs";
 import { resolveConnectionPaths } from "./connection-paths.mjs";
 import { getActiveConnection, loadConnectionRegistry } from "./connection-registry.mjs";
 
@@ -37,6 +37,28 @@ export async function allowedProjectsForCurrentConnection({ paths, store, env = 
   const refs = access.updatedAt === null ? migrationSeedProjectRefs({ registry: context.registry, projects }) : access.projectRefs;
   const allowed = new Set(refs);
   return { ...context, projectRefs: refs, projects: projects.filter((project) => allowed.has(project.projectRef)) };
+}
+
+export async function revokeProjectFromSavedConnections({ paths, projectRef } = {}) {
+  if (!paths || typeof projectRef !== "string" || !projectRef) throw new Error("project grant cleanup requires paths and projectRef");
+  const registry = await loadConnectionRegistry({ paths });
+  const changedConnectionIds = [];
+  const failures = [];
+  for (const connection of registry.connections) {
+    try {
+      const connectionPaths = resolveConnectionPaths({ paths, connection });
+      const revoked = await revokeConnectionProjectAccess({ paths: connectionPaths, projectRef });
+      if (revoked.changed) changedConnectionIds.push(connection.id);
+    } catch (error) {
+      failures.push({
+        connectionId: connection.id,
+        connectionName: connection.name,
+        errorCode: typeof error?.code === "string" ? error.code : null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { changedConnectionIds, failures };
 }
 
 export async function assertRuntimeProjectAllowed({ paths, registry, connection, projectRef } = {}) {

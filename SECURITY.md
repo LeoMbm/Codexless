@@ -2,11 +2,11 @@
 
 Rootbound is a local execution bridge. It can read project files, edit files, and run commands under authority resolved from the user's local Codex environment. Treat it with the same care as other local development tooling that can affect real repositories.
 
-This document describes the **Rootbound V5 public surface** on the V5 feature branch.
+This document describes the **Rootbound V5 architecture and current public surface**.
 
 ## Core security rules
 
-V5 is built around these rules:
+Rootbound is built around these rules:
 
 1. **Codex remains the local authority / sandbox source.**
 2. **Rootbound may narrow authority, but a remote caller must not silently widen it.**
@@ -14,6 +14,7 @@ V5 is built around these rules:
 4. **The public ChatGPT lane must not silently start a Codex model turn.**
 5. **Credentials must not enter ordinary durable state such as SQLite, command argv, logs, diagnostics, or non-secret tunnel metadata.** A credential that the guided tunnel setup must retain is isolated in a dedicated local private-secret file with restricted permissions.
 6. **Ambiguous retries must fail closed when replay could duplicate an external mutation.**
+7. **Project routing must be connection-scoped and fail closed when more than one project could satisfy an unscoped request.**
 
 Rootbound is not a magic sandbox around deliberately broad local permissions. If the user grants broad workspace authority locally, authorized Rootbound operations can be correspondingly powerful.
 
@@ -21,12 +22,13 @@ Rootbound is not a magic sandbox around deliberately broad local permissions. If
 
 ## Public surface boundary
 
-The canonical public surface is defined only in `src/surface-contracts.mjs` and tested by `test/public-contract.mjs`.
+The canonical public surface is defined only in `src/surface-contracts.mjs` and tested by `test/public-contract.mjs` plus the current surface release contract.
 
-Current V5 surface:
+Current public surface:
 
-- `rootbound-public-preview-v5`
-- 32 public tools
+- `rootbound-public-preview-v6`
+- 33 public tools
+- `codex.workspace_list` for connection-scoped workspace discovery
 - no public model catalog
 - no public Codex Agent / turn-start tool
 - quota observation is read-only/advisory and never routes or starts a model turn
@@ -59,7 +61,7 @@ Security properties:
 - destructive commands remain destructive and are marked accordingly;
 - durable commands reject detectable literal credentials before argv is written to SQLite.
 
-The nested-command classifier is a product guard, not a general adversarial-process sandbox. Arbitrary code execution can deliberately hide secondary process launches; V5 does not claim to solve that impossible problem by argv inspection alone. The supported model-facing contract must not deliberately disguise Codex model execution inside unrelated commands.
+The nested-command classifier is a product guard, not a general adversarial-process sandbox. Arbitrary code execution can deliberately hide secondary process launches; Rootbound does not claim to solve that impossible problem by argv inspection alone. The supported model-facing contract must not deliberately disguise Codex model execution inside unrelated commands.
 
 ### Rootbound Codex permission profile
 
@@ -108,9 +110,30 @@ For normal onboarding, `rootbound connect .` is a guided setup. It:
 6. backs up Codex config before mutation;
 7. adds only the exact project root to persistent Codex config; the Rootbound profile remains process-local;
 8. runs doctor / authority validation using the runtime-only Rootbound profile;
-9. restores the previous config if post-mutation validation fails.
+9. restores the previous config if post-mutation validation fails;
+10. grants the validated project only to the currently active saved Rootbound connection.
 
-`codex.workspace_open` never creates or widens trust as a side effect. An unauthorized workspace returns a typed `needs_trust` state.
+`codex.workspace_open` never creates or widens trust as a side effect. An unauthorized workspace returns a typed `needs_trust` or connection-scope error state.
+
+### Multi-project connection boundary
+
+Rootbound can expose several trusted projects through one supervised runtime, but trust and connection access are separate decisions.
+
+- each saved connection has its own durable project allowlist;
+- `rootbound connect .` is the explicit operation that grants a project to the active connection;
+- `codex.workspace_list` returns only projects allowed for that connection;
+- project operations are centrally resolved through canonical `cwd` / project state before reaching the Codex authority executor;
+- when multiple projects are available and no safe scope exists, Rootbound returns `PROJECT_SCOPE_REQUIRED` instead of using a mutable global active project;
+- the supervisor's runtime anchor exists only to bootstrap/restart the shared runtime and is not a hidden project selector;
+- a registered nested project that is not allowed cannot be accessed by pretending it belongs to an allowed parent project;
+- connection switches validate that the existing runtime anchor is allowed on the target connection before starting it there;
+- with multiple saved connections, Rootbound does not infer or copy project grants between connections.
+
+The original one-connection upgrade path may seed that single connection from already trusted registered projects. This migration compatibility is deliberately disabled once multiple saved connections exist.
+
+The environment-only `ROOTBOUND_TUNNEL_ARGV_JSON` escape hatch has no durable saved-connection identity and therefore remains outside connection-scoped project allowlisting.
+
+See `docs/multi-project-runtime.md` for the full routing and lifecycle contract.
 
 ---
 
@@ -193,9 +216,11 @@ Reusing the same idempotency key with a different request payload is rejected.
 
 Security properties:
 
+- project selection follows the same connection-scoped routing boundary as ordinary project tools;
 - thread selection is constrained to the authorized canonical project/Git root;
 - repository/branch/SHA evidence is used to rank continuity matches rather than trusting recency alone;
 - genuinely ambiguous matches are returned as ambiguous instead of guessed;
+- when several projects exist, the runtime anchor is not exposed as an implicit continuity default;
 - remote HTTP does not assume that an MCP transport session uniquely identifies one ChatGPT conversation;
 - the product flow uses an opaque `rescueRef`; the underlying continuity `bindingRef` remains internal plumbing;
 - write-capable rescue operations verify the current worktree fingerprint before continuing;
@@ -219,7 +244,7 @@ Rescue rollback is intentionally narrower than source-control rollback.
 
 ## Secret boundaries
 
-V5 separates ordinary durable state from credentials needed by the local tunnel runtime.
+Rootbound separates ordinary durable state from credentials needed by the local tunnel runtime.
 
 ### Durable commands
 
@@ -324,7 +349,7 @@ The public Browser surface is read-first:
 - `codex.browser_tabs`
 - `codex.browser_read`
 
-It does not expose general click / fill / navigation actions in the public V5 contract.
+It does not expose general click / fill / navigation actions in the current public contract.
 
 Webpage content is untrusted input and can contain prompt injection. A model must treat page text as data, not higher-priority instructions.
 
@@ -334,7 +359,7 @@ Webpage content is untrusted input and can contain prompt injection. A model mus
 
 The local HTTP entry point is intended for loopback only. Raw unauthenticated local service exposure to the public internet is not a supported deployment.
 
-Normal ChatGPT access uses the authenticated OpenAI tunnel path and launches Rootbound over stdio. The HTTP launcher remains an advanced/local compatibility surface, not the normal V5 onboarding path.
+Normal ChatGPT access uses the authenticated OpenAI tunnel path and launches Rootbound over stdio. The HTTP launcher remains an advanced/local compatibility surface, not the normal onboarding path.
 
 Rootbound manages the local stdio command/profile and secret boundary, but it does not control the security of external tunnel infrastructure or a separately supplied manual tunnel command.
 
@@ -342,7 +367,7 @@ Rootbound manages the local stdio command/profile and secret boundary, but it do
 
 ## Installer / upgrade / uninstall
 
-V5 separates the app tree from the state tree.
+Rootbound separates the app tree from the state tree.
 
 macOS default:
 
@@ -377,7 +402,7 @@ The installer itself does not create project trust or tunnel credentials. Those 
 
 ## Typed error contract
 
-Migrated V5 tools use machine-readable errors with fields such as:
+Migrated tools use machine-readable errors with fields such as:
 
 - `errorCode`
 - `category`
@@ -385,6 +410,8 @@ Migrated V5 tools use machine-readable errors with fields such as:
 - `nextActions`
 - `operation`
 - `surfaceVersion`
+
+Project-routing errors such as `PROJECT_SCOPE_REQUIRED`, `PROJECT_NOT_ALLOWED_FOR_CONNECTION`, `PROJECT_PATH_UNAVAILABLE`, and `PROJECT_SCOPE_MISMATCH` are deterministic non-retryable state/configuration errors. Clients should resolve the scope/configuration rather than retrying blindly.
 
 Clients should use these fields instead of parsing human error strings.
 
@@ -400,6 +427,9 @@ Before the Apple Silicon macOS Technical Preview release or merge:
 - run the full test suite;
 - inspect the packed artifact;
 - run guided `rootbound connect .` acceptance on a real Mac;
+- run the multi-project real-Mac smoke test in `docs/multi-project-runtime.md`;
+- verify two projects reuse one runtime and remain independently scoped;
+- verify multiple saved connections do not leak project grants;
 - complete controlled real-machine macOS acceptance for the public preview scope;
 - scan the artifact and repository for secrets / machine paths;
 - run real-machine command / edit / restart / upgrade / uninstall acceptance on Apple Silicon macOS.
@@ -424,7 +454,7 @@ Known limitations include:
 - Browser Reader is read-first rather than a general browser agent;
 - final macOS preview release still requires the remaining controlled Mac release evidence.
 
-The durable acceptance checklist is maintained in `docs/plans/rootbound-v5.md`.
+The durable acceptance checklist is maintained in `docs/plans/rootbound-v5.md`; the multi-project acceptance contract is in `docs/multi-project-runtime.md`.
 
 ---
 
