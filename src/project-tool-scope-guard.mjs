@@ -9,6 +9,7 @@ const IMPLICIT_SCOPE_GUARDED_TOOLS = new Set([
   "codex.apply_patch",
   "codex.read_many",
   "codex.precise_edit",
+  "codex.asset_import",
 ]);
 
 export function hasStrongProjectScope(args = {}) {
