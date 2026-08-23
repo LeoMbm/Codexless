@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createRequire } from "node:module";
+import { typedToolResponse } from "./tool-errors.mjs";
 
 export const DEFAULT_ASSET_MAX_BYTES = 25 * 1024 * 1024;
 const MAX_ASSET_MAX_BYTES = 100 * 1024 * 1024;
@@ -38,47 +39,27 @@ export function registerAssetTools(server, { authorityExecutor, continuityState 
     }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { "openai/fileParams": ["asset"] },
-  }, async ({ bindingRef, rescueRef, ...input }, ctx) => {
-    try {
-      const resolved = rescueManager && getSessionKey
-        ? rescueManager.resolveBinding({ sessionKey: getSessionKey(ctx), cwd: input.cwd, explicitBindingRef: bindingRef, rescueRef })
-        : { bindingRef: bindingRef ?? null, rescue: null, implicit: false };
-      if (resolved.rescue) await rescueManager.assertNoDrift(resolved.rescue);
-      const scoped = resolved.bindingRef && continuityState ? continuityState.assertCwd(resolved.bindingRef, input.cwd) : null;
-      const effectiveCwd = scoped?.targetCwd ?? input.cwd ?? resolved.rescue?.projectRoot;
-      const result = await importChatGptAsset({ authorityExecutor, ...input, cwd: effectiveCwd });
-      if (resolved.bindingRef && continuityState) {
-        continuityState.record(resolved.bindingRef, { kind: "asset_import", path: result.path, cwd: result.cwd, status: "applied", bytes: result.bytes, sha256: result.sha256 });
-      }
-      let updatedRescue = resolved.rescue;
-      if (resolved.rescue) {
-        updatedRescue = await rescueManager.refreshExpected(resolved.rescue, { rollbackSafe: false, reason: "asset_import_write" });
-      }
-      const payload = {
-        ...result,
-        ...(resolved.bindingRef ? { continuityJournaled: true } : {}),
-        ...(resolved.implicit && updatedRescue ? { rescueSession: rescueManager.publicSession(updatedRescue) } : {}),
-      };
-      return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: false };
-    } catch (error) {
-      const payload = normalizeAssetToolError(error);
-      return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: true };
+  }, async ({ bindingRef, rescueRef, ...input }, ctx) => typedToolResponse(async () => {
+    const resolved = rescueManager && getSessionKey
+      ? rescueManager.resolveBinding({ sessionKey: getSessionKey(ctx), cwd: input.cwd, explicitBindingRef: bindingRef, rescueRef })
+      : { bindingRef: bindingRef ?? null, rescue: null, implicit: false };
+    if (resolved.rescue) await rescueManager.assertNoDrift(resolved.rescue);
+    const scoped = resolved.bindingRef && continuityState ? continuityState.assertCwd(resolved.bindingRef, input.cwd) : null;
+    const effectiveCwd = scoped?.targetCwd ?? input.cwd ?? resolved.rescue?.projectRoot;
+    const result = await importChatGptAsset({ authorityExecutor, ...input, cwd: effectiveCwd });
+    if (resolved.bindingRef && continuityState) {
+      continuityState.record(resolved.bindingRef, { kind: "asset_import", path: result.path, cwd: result.cwd, status: "applied", bytes: result.bytes, sha256: result.sha256 });
     }
-  });
-}
-
-function normalizeAssetToolError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    status: "error",
-    operation: "asset_import",
-    code: typeof error?.code === "string" ? error.code : "ASSET_IMPORT_FAILED",
-    category: typeof error?.category === "string" ? error.category : "validation",
-    retryable: error?.retryable === true,
-    message,
-    ...(Array.isArray(error?.nextActions) ? { nextActions: error.nextActions } : {}),
-    modelTurnStarted: false,
-  };
+    let updatedRescue = resolved.rescue;
+    if (resolved.rescue) {
+      updatedRescue = await rescueManager.refreshExpected(resolved.rescue, { rollbackSafe: false, reason: "asset_import_write" });
+    }
+    return {
+      ...result,
+      ...(resolved.bindingRef ? { continuityJournaled: true } : {}),
+      ...(resolved.implicit && updatedRescue ? { rescueSession: rescueManager.publicSession(updatedRescue) } : {}),
+    };
+  }, { operation: "asset_import" }));
 }
 
 export async function importChatGptAsset({
@@ -97,6 +78,13 @@ export async function importChatGptAsset({
   const normalizedDestination = normalizeDestination(destination);
   if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_ASSET_MAX_BYTES) {
     throw new Error(`maxBytes must be an integer between 1 and ${MAX_ASSET_MAX_BYTES}`);
+  }
+  if (normalizedAsset.size !== null && normalizedAsset.size > maxBytes) {
+    const error = new Error(`asset metadata size ${normalizedAsset.size} exceeds maxBytes ${maxBytes}`);
+    error.code = "ASSET_TOO_LARGE";
+    error.category = "validation";
+    error.retryable = false;
+    throw error;
   }
   if (expectedMimeType !== null && !isAllowedMimeType(expectedMimeType)) throw new Error(`unsupported expectedMimeType: ${expectedMimeType}`);
   if (normalizedAsset.mimeType && !isAllowedMimeType(normalizedAsset.mimeType)) throw new Error(`unsupported asset mime_type: ${normalizedAsset.mimeType}`);
@@ -256,7 +244,6 @@ const {pipeline}=require('node:stream/promises');
     source.on('data',(chunk)=>{bytes+=chunk.length;if(bytes>cfg.maxBytes)source.destroy(new Error('asset exceeds maxBytes'));else hash.update(chunk);});
     await pipeline(source,fs.createWriteStream(temp,{flags:'wx',mode:0o600}));
     if(bytes>cfg.maxBytes){await fsp.rm(temp,{force:true});console.error('asset exceeds maxBytes');process.exit(22);}
-    if(existing&&cfg.overwrite)await fsp.rm(target,{force:false});
     await fsp.rename(temp,target);
     await fsp.chmod(target,0o644).catch(()=>{});
   }catch(e){await fsp.rm(temp,{force:true}).catch(()=>{});if(/maxBytes/.test(String(e&&e.message))){console.error('asset exceeds maxBytes');process.exit(22);}console.error('asset write failed');process.exit(27);}
