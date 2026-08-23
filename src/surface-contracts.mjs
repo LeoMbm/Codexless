@@ -30,6 +30,7 @@ export const PUBLIC_TOOL_NAMES = Object.freeze([
   "codex.precise_edit",
   "codex.edit_undo",
   "codex.edit_redo",
+  "codex.asset_import",
   "codex.git_status",
   "codex.git_diff",
   "codex.browser_status",
