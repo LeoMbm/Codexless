@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { registerAssetTools } from "./asset-tools.mjs";
 import { registerBrowserReaderTools } from "./browser-reader-tools.mjs";
 import { registerCommandTools } from "./command-tools.mjs";
 import { registerConstructionTools } from "./construction-tools.mjs";
@@ -11,7 +12,7 @@ import { summarizeRedactedArgv } from "./secret-boundaries.mjs";
 import { registerThreadHistoryTools } from "./thread-history-tools.mjs";
 import { typedToolResponse } from "./tool-errors.mjs";
 import { registerWorkspaceTools } from "./workspace-tools.mjs";
-import { PUBLIC_SERVER_VERSION, PUBLIC_SURFACE_VERSION } from "./surface-contracts.mjs";
+import { PUBLIC_SERVER_VERSION, PUBLIC_SURFACE_VERSION, PUBLIC_TOOL_NAMES } from "./surface-contracts.mjs";
 
 const require = createRequire(import.meta.url);
 const { McpServer } = require("@modelcontextprotocol/server");
@@ -106,6 +107,9 @@ export function createPublicServerFactory({ executor, authorityExecutor, publicC
     registerRescueTools(server, { context: publicContext, authorityExecutor, continuityState, stateStore, rescueManager, rescueAutopilot, getSessionKey });
     registerConstructionTools(projectScopeGuardedServer, { authorityExecutor, continuityState, stateStore, rescueManager, getSessionKey });
     registerRepoTools(projectScopeGuardedServer, { authorityExecutor, continuityState, rescueManager, getSessionKey });
+    if (PUBLIC_TOOL_NAMES.includes("codex.asset_import")) {
+      registerAssetTools(projectScopeGuardedServer, { authorityExecutor, continuityState, rescueManager, getSessionKey });
+    }
     registerBrowserReaderTools(server, browserReader);
     return server;
   };
